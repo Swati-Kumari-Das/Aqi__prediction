@@ -5,3 +5,4 @@ requests
 plotly
 schedule
 pytz
+python-dotenv
