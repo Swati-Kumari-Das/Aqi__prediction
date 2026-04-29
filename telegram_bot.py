@@ -337,7 +337,7 @@ def send_alert():
 # --------------------------
 def run_scheduler():
 
-    schedule.every().day.at("04:00").do(send_alert)
+    schedule.every().day.at("16:00").do(send_alert)
 
     print("Scheduler started...")
 
