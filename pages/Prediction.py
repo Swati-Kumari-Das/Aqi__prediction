@@ -162,14 +162,6 @@ def send_daily_alert():
     requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
                   data={"chat_id": CHAT_ID, "text": msg})
 
-def scheduler_loop():
-    schedule.every(120).seconds.do(send_daily_alert)
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
-
-threading.Thread(target=scheduler_loop, daemon=True).start()
-
 
 # =========================================
 # AQI HELPERS
