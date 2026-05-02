@@ -15,7 +15,7 @@ st.markdown("""
 
 st.header('🌪️ AirWatch India ')
 
-st.image('India-2023.png', caption='India AQI', use_column_width=True)
+st.image('India-2023.png', caption='India AQI',  width=800)
 
 st.markdown(
     """
