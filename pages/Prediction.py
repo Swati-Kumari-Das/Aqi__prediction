@@ -1961,6 +1961,8 @@
 
 ###################################################################################################
 
+
+ 
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -1971,9 +1973,9 @@ import time
 from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
-
+ 
 load_dotenv()
-
+ 
 # =========================================
 # PAGE CONFIG
 # =========================================
@@ -1981,87 +1983,87 @@ st.set_page_config(
     page_title="Prediction",
     layout="wide"
 )
-
+ 
 # =========================================
 # SESSION STATE INIT
 # Keeps AQI data alive across all reruns
 # =========================================
 if "aqi_data" not in st.session_state:
     st.session_state.aqi_data = None
-
+ 
 # =========================================
 # API KEYS
 # =========================================
-
+ 
 API = os.getenv("AQICN_API_KEY")
 OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-
+ 
 # =========================================
 # GLOBAL CSS
 # =========================================
 st.markdown("""
 <style>
 [data-testid="stSidebarNav"] ul li:first-child { display:none; }
-
+ 
 .stApp { background:white; }
-
+ 
 .solution{
     background:white; padding:15px; border-radius:12px;
     text-align:center; color:#111827; font-weight:600;
     min-height:90px; display:flex; align-items:center;
     justify-content:center; box-shadow:0 2px 8px rgba(0,0,0,.08);
 }
-
+ 
 .health{
     background:linear-gradient(135deg,#1e293b,#0f172a);
     padding:20px; border-radius:15px; text-align:center; color:white;
 }
-
+ 
 .metric-box{
     background:#f5f7fb; padding:25px; border-radius:18px;
     box-shadow:0 2px 8px rgba(0,0,0,.08); text-align:center;
     margin-bottom:20px; border-left:6px solid #22c55e;
 }
-
+ 
 .metric-name  { font-size:20px; font-weight:600; color:#111827; }
 .metric-value { font-size:34px; font-weight:bold; margin-top:10px; color:#1e293b; }
-
+ 
 .risk-box{
     padding:22px; border-radius:16px; text-align:center;
     font-weight:700; font-size:22px; margin-bottom:10px;
 }
-
+ 
 .forecast-card{
     background:#f5f7fb; padding:14px; border-radius:12px;
     text-align:center; box-shadow:0 2px 6px rgba(0,0,0,.07);
 }
-
+ 
 .activity-card{
     background:#f0fdf4; border-left:5px solid #22c55e;
     padding:16px; border-radius:12px; margin-bottom:10px;
     font-weight:600;
 }
-
+ 
 .activity-warn{
     background:#fff7ed; border-left:5px solid #f97316;
     padding:16px; border-radius:12px; margin-bottom:10px;
     font-weight:600;
 }
-
+ 
 .section-header{
     font-size:26px; font-weight:700; margin-bottom:6px; color:#1e293b;
 }
-
+ 
 .sidebar-feature-info{
     background:#f1f5f9; padding:14px; border-radius:12px;
     font-size:13px; color:#475569; margin-top:10px; line-height:1.6;
 }
 </style>
 """, unsafe_allow_html=True)
-
-
+ 
+ 
 # =========================================
 # FETCH AQI
 # =========================================
@@ -2084,8 +2086,8 @@ def fetch(city):
         return None, None
     missing = sum(1 for v in raw.values() if v is None)
     return raw, missing
-
-
+ 
+ 
 # =========================================
 # FETCH WEATHER
 # =========================================
@@ -2104,8 +2106,8 @@ def fetch_weather(city):
         }
     except:
         return None
-
-
+ 
+ 
 # =========================================
 # TELEGRAM ALERT
 # =========================================
@@ -2121,8 +2123,8 @@ def send_daily_alert():
     msg = f"Daily AQI Forecast 🌫️\nCity: {city}\nAQI: {aqi}\n\nAdvice:\n{advice}"
     requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
                   data={"chat_id": CHAT_ID, "text": msg})
-
-
+ 
+ 
 # =========================================
 # AQI HELPERS
 # =========================================
@@ -2133,7 +2135,7 @@ def category(aqi):
     elif aqi <= 300: return "POOR",          "#ffffff", "#ff8800"
     elif aqi <= 400: return "VERY POOR",     "#ffffff", "#ff1a1a"
     else:            return "SEVERE",        "#ffffff", "#8b0029"
-
+ 
 def solutions(aqi):
     if aqi <= 50:
         return ["🌿 Outdoor activity safe","🏠 Ventilate home",
@@ -2150,7 +2152,7 @@ def solutions(aqi):
     else:
         return ["🚨 Strict indoor stay","😷 N95/N99 mask",
                 "❌ Avoid exertion","👨‍👩‍👧 Protect elderly"]
-
+ 
 def health(aqi):
     if aqi <= 50:
         return ["No major respiratory issues","Very low heart stress","Minimal allergies"]
@@ -2162,8 +2164,8 @@ def health(aqi):
         return ["High asthma risk","Heart patients affected","Persistent coughing"]
     else:
         return ["Severe respiratory distress","Serious heart strain","Dangerous for all"]
-
-
+ 
+ 
 # =========================================
 # FEATURE 1 HELPERS — Personalized Risk
 # =========================================
@@ -2179,7 +2181,7 @@ def personal_risk_score(aqi, age, has_asthma, has_heart):
         base = 50 + ((aqi - 200) / 100) * 15 # 50–65
     else:
         base = 65 + min(15, ((aqi - 300) / 200) * 15)  # 65–80
-
+ 
     # Age bonus: smooth curve — very young and very old are most vulnerable
     if age <= 5:
         age_bonus = 20
@@ -2195,14 +2197,14 @@ def personal_risk_score(aqi, age, has_asthma, has_heart):
         age_bonus = 10 + ((age - 60) / 15) * 8 # 10→18
     else:
         age_bonus = 18 + min(7, ((age - 75) / 20) * 7) # 18→25
-
+ 
     # Condition bonuses: scale with AQI severity (worse air = conditions matter more)
     aqi_severity = min(1.0, aqi / 300)  # 0–1 scale
     asthma_bonus = round(8 + aqi_severity * 12) if has_asthma else 0  # 8–20
     heart_bonus  = round(6 + aqi_severity * 10) if has_heart  else 0  # 6–16
-
+ 
     score = min(100, round(base + age_bonus + asthma_bonus + heart_bonus))
-
+ 
     if score <= 20:
         label   = "🟢 Low Risk"
         color   = "#16a34a"
@@ -2241,10 +2243,10 @@ def personal_risk_score(aqi, age, has_asthma, has_heart):
             "🏥 Seek medical advice if any breathing difficulty.",
             "👨‍👩‍👧 Especially dangerous for your age/condition.",
         ]
-
+ 
     return score, label, color, bgcolor, advice, age_bonus, asthma_bonus, heart_bonus
-
-
+ 
+ 
 # =========================================
 # FEATURE 2 HELPERS — 7-Day Forecast
 # =========================================
@@ -2254,79 +2256,79 @@ def generate_forecast(current_aqi, raw, weather, city):
     - Pollutant-based evolution (PM2.5, PM10, NO2)
     - Weather-driven adjustments (wind, humidity, temp)
     """
-
+ 
     pm25 = raw.get("PM2.5", 0) or 0
     pm10 = raw.get("PM10", 0) or 0
     no2  = raw.get("NO2", 0) or 0
-
+ 
     forecast = []
     today = datetime.today()
-
+ 
     seed = abs(hash(city.lower() + today.strftime("%Y%m%d"))) % (2**31)
     rng = np.random.default_rng(seed)
-
+ 
     prev_aqi = current_aqi
-
+ 
     for i in range(7):
-
+ 
         # -------- Pollutant evolution --------
         pm25 *= rng.uniform(0.96, 1.04)
         pm10 *= rng.uniform(0.97, 1.03)
         no2  *= rng.uniform(0.90, 1.08)
-
+ 
         # -------- Weather impact --------
         wind = weather["wind"]
         humidity = weather["humidity"]
         temp = weather["temp"]
-
+ 
         weather_effect = 0
-
+ 
         if wind < 2:
             weather_effect += 20
         elif wind < 5:
             weather_effect += 5
         else:
             weather_effect -= 15
-
+ 
         if humidity > 75:
             weather_effect += 8
         elif humidity < 40:
             weather_effect -= 5
-
+ 
         if temp > 35:
             weather_effect += 5
-
+ 
         # Weekend cleaner air
         day = (today + timedelta(days=i)).weekday()
         if day >= 5:
             weather_effect -= 10
-
+ 
         # -------- AQI Calculation --------
         base_aqi = max(pm25, pm10, no2)
         aqi = base_aqi + weather_effect
-
+ 
         # Smooth transition
         aqi = 0.7 * prev_aqi + 0.3 * aqi
-
+ 
         # Small natural noise
         aqi += rng.uniform(-5, 5)
-
+ 
         aqi = max(20, min(500, aqi))
         prev_aqi = aqi
-
+ 
         forecast.append({
             "date": (today + timedelta(days=i)).strftime("%a\n%d %b"),
             "aqi": round(aqi, 1)
         })
-
+ 
     return forecast
-
+ 
 def worst_day(forecast):
     return max(forecast, key=lambda x: x["aqi"])
-
+ 
 def best_day(forecast):
     return min(forecast, key=lambda x: x["aqi"])
-
+ 
 def forecast_color(aqi):
     if aqi <= 50:    return "#00e600"
     elif aqi <= 100: return "#9acd32"
@@ -2334,8 +2336,8 @@ def forecast_color(aqi):
     elif aqi <= 300: return "#f97316"
     elif aqi <= 400: return "#ef4444"
     else:            return "#7f1d1d"
-
-
+ 
+ 
 # =========================================
 # FEATURE 3 HELPERS — Activity Planner
 # =========================================
@@ -2347,7 +2349,7 @@ ACTIVITY_LIMITS = {
     "🧘 Yoga / Stretching":   {"safe": 150, "risky": 250},
     "🏋️ Intense Gym Outdoor": {"safe":  75, "risky": 150},
 }
-
+ 
 def activity_advice(aqi, activity):
     key    = activity
     limits = ACTIVITY_LIMITS.get(key, {"safe": 100, "risky": 200})
@@ -2358,12 +2360,12 @@ def activity_advice(aqi, activity):
         return "moderate", f"⚠️ Moderate risk for **{name}**. Consider wearing a mask."
     else:
         return "unsafe",   f"🚫 **{name}** is not recommended outdoors today."
-
+ 
 def best_time_message(aqi):
     if aqi <= 100:   return "🕕 Any time is fine. Morning (6–8 AM) is typically freshest."
     elif aqi <= 200: return "🕔 Prefer early morning (5–7 AM) before traffic peaks."
     else:            return "🚫 No outdoor time recommended today. Stay indoors."
-
+ 
 def hourly_heatmap(aqi, city=""):
     """
     Realistic hourly AQI pattern:
@@ -2375,7 +2377,7 @@ def hourly_heatmap(aqi, city=""):
     """
     coastal_cities = {"mumbai", "chennai", "kolkata", "visakhapatnam", "kochi"}
     is_coastal = city.strip().lower() in coastal_cities
-
+ 
     # Hourly multiplier profile (index = hour 0–23)
     base_profile = [
         0.72, 0.68, 0.65, 0.63, 0.62, 0.65,  # 0–5 AM: cleanest (low traffic)
@@ -2383,25 +2385,25 @@ def hourly_heatmap(aqi, city=""):
         0.95, 0.88, 0.85, 0.88, 0.95, 1.20,  # 12–17: midday dip then rise
         1.38, 1.42, 1.30, 1.12, 0.95, 0.80,  # 18–23: evening peak & taper
     ]
-
+ 
     if is_coastal:
         # Sea breeze hits around 13–17, pushing pollutants inland
         for h in range(13, 18):
             base_profile[h] *= 0.85
-
+ 
     hours = []
     seed  = abs(hash(city.lower() + datetime.today().strftime("%Y%m%d"))) % (2**31)
     rng   = np.random.default_rng(seed)
-
+ 
     for h, factor in enumerate(base_profile):
         # Small per-hour noise so bars aren't perfectly smooth (realistic)
         jitter = rng.uniform(-0.03, 0.03)
         est    = max(10, min(500, round(aqi * (factor + jitter))))
         hours.append({"Hour": f"{h:02d}:00", "Est. AQI": est})
-
+ 
     return hours
-
-
+ 
+ 
 # =========================================
 # SIDEBAR — Navigation
 # =========================================
@@ -2423,7 +2425,7 @@ st.sidebar.markdown("""
 .verypoor     { background:#ff1a1a; }
 .severe       { background:#8b0029; }
 </style>
-
+ 
 <div class="aqi-box">
 <div class="aqi-title">🎨 AQI Scale</div>
 <div class="aqi-tag good">🙂 Good (0–50)</div>
@@ -2434,10 +2436,10 @@ st.sidebar.markdown("""
 <div class="aqi-tag severe">☠️ Severe (401+)</div>
 </div>
 """, unsafe_allow_html=True)
-
+ 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🔧 Features")
-
+ 
 # Radio acts as sidebar navigation for the 3 features
 feature = st.sidebar.radio(
     "Select a feature to explore:",
@@ -2449,7 +2451,7 @@ feature = st.sidebar.radio(
     ],
     key="sidebar_feature"
 )
-
+ 
 # Feature descriptions shown in sidebar
 descriptions = {
     "📊 AQI Monitor": "Enter a city to get live AQI, pollutant breakdown, health advice, and weather.",
@@ -2461,7 +2463,7 @@ st.sidebar.markdown(
     f'<div class="sidebar-feature-info">ℹ️ {descriptions[feature]}</div>',
     unsafe_allow_html=True
 )
-
+ 
 # =========================================
 # SIDEBAR — TELEGRAM ALERT BUTTON
 # =========================================
@@ -2471,27 +2473,27 @@ st.sidebar.caption("Get instant AQI alert + daily updates at 8 AM on Telegram.")
 st.sidebar.markdown("""
 <div style='background:#f1f5f9;padding:10px;border-radius:8px;
 font-size:12px;color:#475569;margin-top:8px;'>
-
+ 
 📌 <b>How to Subscribe:</b><br>
 1. Click the button<br>
 2. Open Telegram<br>
 3. Press <b>Start</b><br>
 4. Send: <b>/subscribe your_city</b>
-
+ 
 </div>
 """, unsafe_allow_html=True)
-
+ 
 # Session flag so we only show the button once per session
 if "telegram_subscribed" not in st.session_state:
     st.session_state.telegram_subscribed = False
-
+ 
 def build_telegram_message(city_name, aqi_val, raw_data, weather_data):
     """Builds a rich Telegram message with current AQI data."""
     import pytz
     from datetime import datetime
     IST      = pytz.timezone("Asia/Kolkata")
     now_ist  = datetime.now(IST).strftime("%d %b %Y, %I:%M %p IST")
-
+ 
     # Category
     if aqi_val <= 50:    cat_label, cat_emoji = "Good ✅",          "🟢"
     elif aqi_val <= 100: cat_label, cat_emoji = "Satisfactory 🙂",  "🟡"
@@ -2499,7 +2501,7 @@ def build_telegram_message(city_name, aqi_val, raw_data, weather_data):
     elif aqi_val <= 300: cat_label, cat_emoji = "Poor 😷",           "🔴"
     elif aqi_val <= 400: cat_label, cat_emoji = "Very Poor 🤢",      "🔴"
     else:                cat_label, cat_emoji = "Severe ☠️",         "⚫"
-
+ 
     # Advice
     if aqi_val <= 50:
         advice = ["✅ Air is clean. Enjoy outdoor activities.", "💧 Stay hydrated."]
@@ -2511,19 +2513,19 @@ def build_telegram_message(city_name, aqi_val, raw_data, weather_data):
         advice = ["🏠 Stay indoors.", "😷 N95/N99 mask if going out.", "❌ Avoid outdoor exercise."]
     else:
         advice = ["🚨 Stay strictly indoors.", "😷 N99 mask even indoors.", "🏥 Seek help if breathing issues."]
-
+ 
     # Best time
     if aqi_val <= 100:   outdoor_time = "🕕 Any time is fine. Morning (6–8 AM) is freshest."
     elif aqi_val <= 200: outdoor_time = "🕔 Early morning (5–7 AM) before traffic peaks."
     else:                outdoor_time = "🚫 Not recommended to go outside today."
-
+ 
     # Pollutants
     pollutant_lines = ""
     if raw_data:
         for k, v in raw_data.items():
             if v is not None:
                 pollutant_lines += f"  • {k}: {v}\n"
-
+ 
     # Weather
     weather_lines = ""
     if weather_data:
@@ -2534,69 +2536,48 @@ def build_telegram_message(city_name, aqi_val, raw_data, weather_data):
             f"  🌬 Wind: {weather_data['wind']} m/s\n"
             f"  ⛅ Condition: {weather_data['condition']}\n"
         )
-
+ 
     msg = f"""🌫️ *AQI Alert — {city_name.upper()}*
 📅 {now_ist}
 {'─' * 28}
-
+ 
 {cat_emoji} *AQI: {aqi_val}* — {cat_label}
-
+ 
 💡 *Advice:*
 """ + "\n".join(f"  {t}" for t in advice) + f"""
-
+ 
 ⏰ *Best Outdoor Time:*
   {outdoor_time}
-
+ 
 🔬 *Pollutants:*
 {pollutant_lines}{weather_lines}
 {'─' * 28}
 🔔 _You will now receive this alert daily at 8:00 AM IST._
 _Powered by AQI Monitor App_"""
-
+ 
     return msg
-
-
+ 
+ 
 def send_telegram_alert(city_name, aqi_val, raw_data, weather_data):
-    """Sends the rich alert to ALL subscribers from subscriptions.json.
-    Falls back to CHAT_ID env var if the file is empty / missing."""
-    import json
+    """Sends the AQI alert ONLY to the person who clicked the button (CHAT_ID).
+    The scheduled daily alerts to all subscribers are handled by telegram_bot.py.
+    This button is just for the current user to get an instant alert."""
     msg = build_telegram_message(city_name, aqi_val, raw_data, weather_data)
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-
-    # Load all subscribers
+ 
+    if not CHAT_ID:
+        return False, "CHAT_ID not set in .env file."
+ 
     try:
-        with open("subscriptions.json", "r") as f:
-            users = json.load(f)
-    except Exception:
-        users = {}
-
-    # Always include the env-var CHAT_ID as a fallback so the button
-    # always reaches at least one person even before anyone subscribes via bot
-    if CHAT_ID:
-        users[str(CHAT_ID)] = city_name  # city doesn't matter here; we use city_name param
-
-    if not users:
-        return False, "No subscribers found and CHAT_ID not set."
-
-    any_ok = False
-    last_err = ""
-    for chat_id, _city in users.items():
-        try:
-            res = requests.post(url, data={
-                "chat_id":    chat_id,
-                "text":       msg,
-                "parse_mode": "Markdown",
-            }, timeout=15)
-            if res.status_code == 200:
-                any_ok = True
-            else:
-                last_err = res.text
-        except Exception as e:
-            last_err = str(e)
-
-    return any_ok, last_err
-
-
+        res = requests.post(url, json={
+            "chat_id": CHAT_ID,
+            "text":    msg,
+        }, timeout=15)
+        return res.status_code == 200, res.text
+    except Exception as e:
+        return False, str(e)
+ 
+ 
 # Show button only if AQI data is available
 if st.session_state.aqi_data is not None:
     if not st.session_state.telegram_subscribed:
@@ -2659,18 +2640,18 @@ else:
         🔍 Search a city first to enable Telegram alerts.
     </div>
     """, unsafe_allow_html=True)
-
+ 
 # =========================================
 # CITY INPUT — always visible at top
 # =========================================
 st.markdown("<h1 style='text-align:center;'>🌫️ AQI MONITOR</h1>", unsafe_allow_html=True)
-
+ 
 col_inp, col_btn = st.columns([4, 1])
 with col_inp:
     city = st.text_input("Enter City", placeholder="Delhi, Mumbai, Chennai...", label_visibility="collapsed")
 with col_btn:
     check = st.button("🔍 Check AQI", use_container_width=True)
-
+ 
 # On button click → fetch and store in session_state
 if check:
     if city.strip():
@@ -2691,27 +2672,27 @@ if check:
             }
     else:
         st.warning("Please enter a city name.")
-
+ 
 # =========================================
 # RENDER — only if we have data
 # =========================================
 if st.session_state.aqi_data is None:
     st.info("👆 Enter a city above and click **Check AQI** to begin.")
     st.stop()
-
+ 
 # Unpack stored data
 raw     = st.session_state.aqi_data["raw"]
 aqi     = st.session_state.aqi_data["aqi"]
 city    = st.session_state.aqi_data["city"]
 weather = st.session_state.aqi_data["weather"]
-
+ 
 cat, text_color, bg = category(aqi)
-
+ 
 # =========================================================
 # PAGE: AQI MONITOR  (default view)
 # =========================================================
 if feature == "📊 AQI Monitor":
-
+ 
     # AQI CARD
     st.markdown(f"""
     <style>
@@ -2723,7 +2704,7 @@ if feature == "📊 AQI Monitor":
     .aqi-cat   {{font-size:32px;font-weight:600;color:{text_color};}}
     </style>
     """, unsafe_allow_html=True)
-
+ 
     st.markdown(f"""
     <div class="dynamic-card">
         <h2>{city.upper()}</h2>
@@ -2731,7 +2712,7 @@ if feature == "📊 AQI Monitor":
         <div class="aqi-cat">{cat}</div>
     </div>
     """, unsafe_allow_html=True)
-
+ 
     # LIVE WEATHER
     if weather:
         st.markdown("## ☁️ Live Weather")
@@ -2744,14 +2725,14 @@ if feature == "📊 AQI Monitor":
             st.warning("🌬️ Low wind speed — pollutants may be trapped near the surface.")
         if weather["humidity"] > 70:
             st.warning("💧 High humidity — may worsen respiratory symptoms.")
-
+ 
     # SOLUTIONS
     st.markdown("## 🛡️ Protective Measures")
     tips = solutions(aqi)
     c1, c2, c3, c4 = st.columns(4)
     for col, tip in zip([c1, c2, c3, c4], tips):
         col.markdown(f'<div class="solution">{tip}</div>', unsafe_allow_html=True)
-
+ 
     # HEALTH
     st.markdown("## ❤️ Health Challenges")
     risks = health(aqi)
@@ -2759,7 +2740,7 @@ if feature == "📊 AQI Monitor":
     h1.markdown(f'<div class="health"><b>🫁 Respiratory</b><br><br>{risks[0]}</div>', unsafe_allow_html=True)
     h2.markdown(f'<div class="health"><b>❤️ Heart</b><br><br>{risks[1]}</div>',       unsafe_allow_html=True)
     h3.markdown(f'<div class="health"><b>🤧 Allergy</b><br><br>{risks[2]}</div>',     unsafe_allow_html=True)
-
+ 
     # POLLUTANTS
     st.markdown("## 📊 Pollutants")
     df = pd.DataFrame(
@@ -2767,15 +2748,15 @@ if feature == "📊 AQI Monitor":
         columns=["Pollutant", "Value"]
     )
     st.bar_chart(df.set_index("Pollutant"))
-
+ 
     st.caption("💡 Use the **sidebar** to explore Personalized Health Risk, 7-Day Forecast, and Activity Planner.")
-
-
+ 
+ 
 # =========================================================
 # PAGE: PERSONALIZED HEALTH RISK
 # =========================================================
 elif feature == "👤 Personalized Health Risk":
-
+ 
     st.markdown(f"""
     <div style="background:{bg};padding:20px 30px;border-radius:18px;
     margin-bottom:20px;text-align:center;">
@@ -2784,36 +2765,36 @@ elif feature == "👤 Personalized Health Risk":
         </span>
     </div>
     """, unsafe_allow_html=True)
-
+ 
     st.markdown("### Enter Your Health Profile")
     st.caption("Your risk score is calculated from AQI + your personal health factors.")
-
+ 
     with st.form("health_form"):
         col_a, col_b, col_c = st.columns(3)
         age        = col_a.number_input("Your Age", min_value=1, max_value=110, value=30)
         has_asthma = col_b.checkbox("I have Asthma / Respiratory condition")
         has_heart  = col_c.checkbox("I have a Heart condition")
         submitted  = st.form_submit_button("🧮 Calculate My Risk", use_container_width=True)
-
+ 
     if submitted:
         score, label, color, bgcolor, advice_list, age_bonus, asthma_bonus, heart_bonus = \
             personal_risk_score(aqi, age, has_asthma, has_heart)
-
+ 
         # SCORE GAUGE
         st.markdown(f"""
         <div class="risk-box" style="background:{bgcolor};color:{color};border:2px solid {color};">
             {label} &nbsp;|&nbsp; Risk Score: {score} / 100
         </div>
         """, unsafe_allow_html=True)
-
+ 
         # PROGRESS BAR
         st.progress(score / 100)
-
+ 
         # DETAILED ADVICE
         st.markdown("#### 📋 Personalised Advice for You")
         for tip in advice_list:
             st.markdown(f"- {tip}")
-
+ 
         # SCORE BREAKDOWN
         with st.expander("🔍 See how your score was calculated", expanded=True):
             aqi_contrib = round(score - age_bonus - asthma_bonus - heart_bonus)
@@ -2845,7 +2826,7 @@ elif feature == "👤 Personalized Health Risk":
                              "Reason": "Fine particles strain the heart"})
             rows.append({"Factor": "**TOTAL**", "Points Added": score, "Reason": "Capped at 100"})
             st.table(pd.DataFrame(rows))
-
+ 
         # COMPARISON WITH GENERAL POPULATION
         st.markdown("#### 👥 How Does Your Risk Compare?")
         comp_col1, comp_col2, comp_col3 = st.columns(3)
@@ -2854,13 +2835,13 @@ elif feature == "👤 Personalized Health Risk":
         comp_col2.metric("Your Score", f"{score}/100",
                          delta=f"+{score - general_score}" if score > general_score else f"{score - general_score}")
         comp_col3.metric("Max Possible", "100/100")
-
-
+ 
+ 
 # =========================================================
 # PAGE: 7-DAY AQI FORECAST
 # =========================================================
 elif feature == "📅 7-Day AQI Forecast":
-
+ 
     st.markdown(f"""
     <div style="background:{bg};padding:20px 30px;border-radius:18px;
     margin-bottom:20px;text-align:center;">
@@ -2869,15 +2850,15 @@ elif feature == "📅 7-Day AQI Forecast":
         </span>
     </div>
     """, unsafe_allow_html=True)
-
+ 
     if weather is None:
        st.warning("⚠️ Weather data unavailable — using default values.")
        weather = {"temp": 25, "humidity": 50, "wind": 2}
-
+ 
     forecast = generate_forecast(aqi, raw, weather, city)
     w_day    = worst_day(forecast)
     b_day    = best_day(forecast)
-
+ 
     # ALERT ROW
     alert_col1, alert_col2 = st.columns(2)
     w_cat, _, _ = category(int(w_day["aqi"]))
@@ -2890,7 +2871,7 @@ elif feature == "📅 7-Day AQI Forecast":
         f"✅ **Best day:** {b_day['date'].replace(chr(10),' ')} "
         f"— AQI {b_day['aqi']} ({b_cat})"
     )
-
+ 
     # 7 FORECAST CARDS
     st.markdown("### 📆 Day-by-Day Forecast")
     fcols = st.columns(7)
@@ -2911,7 +2892,7 @@ elif feature == "📅 7-Day AQI Forecast":
             </div>
         </div>
         """, unsafe_allow_html=True)
-
+ 
     # LINE CHART
     st.markdown("### 📈 AQI Trend Chart")
     forecast_df = pd.DataFrame({
@@ -2919,7 +2900,7 @@ elif feature == "📅 7-Day AQI Forecast":
         "AQI":  [d["aqi"] for d in forecast]
     }).set_index("Date")
     st.line_chart(forecast_df, use_container_width=True)
-
+ 
     # TREND VERDICT
     first_aqi = forecast[0]["aqi"]
     last_aqi  = forecast[-1]["aqi"]
@@ -2930,7 +2911,7 @@ elif feature == "📅 7-Day AQI Forecast":
         st.success("📉 AQI is trending **BETTER** over the next 7 days. Conditions improving!")
     else:
         st.info("➡️ AQI is expected to remain **STABLE** over the next 7 days.")
-
+ 
     # SAFE DAY SUMMARY TABLE
     st.markdown("### 🗓️ Weekly Summary Table")
     summary = []
@@ -2944,15 +2925,15 @@ elif feature == "📅 7-Day AQI Forecast":
             "Safe Outdoor": safe_icon,
         })
     st.table(pd.DataFrame(summary))
-
+ 
     st.caption("ℹ️ Forecast is simulated based on current AQI with realistic daily variation.")
-
-
+ 
+ 
 # =========================================================
 # PAGE: OUTDOOR ACTIVITY PLANNER
 # =========================================================
 elif feature == "🏃 Outdoor Activity Planner":
-
+ 
     st.markdown(f"""
     <div style="background:{bg};padding:20px 30px;border-radius:18px;
     margin-bottom:20px;text-align:center;">
@@ -2961,7 +2942,7 @@ elif feature == "🏃 Outdoor Activity Planner":
         </span>
     </div>
     """, unsafe_allow_html=True)
-
+ 
     # ── ACTIVITY PICKER ──────────────────────────────────────────────────────
     st.markdown("### 🎯 Select Your Activity")
     activity = st.selectbox(
@@ -2969,10 +2950,10 @@ elif feature == "🏃 Outdoor Activity Planner":
         list(ACTIVITY_LIMITS.keys()),
         key="activity_select"
     )
-
+ 
     status, act_msg = activity_advice(aqi, activity)
     hourly          = hourly_heatmap(aqi, city)
-
+ 
     # ── TODAY'S RECOMMENDATION ───────────────────────────────────────────────
     st.markdown("### 🚦 Today's Recommendation")
     if status == "safe":
@@ -2983,7 +2964,7 @@ elif feature == "🏃 Outdoor Activity Planner":
                     unsafe_allow_html=True)
     else:
         st.error(act_msg)
-
+ 
     # ── SMART WINDOW PLANNER ─────────────────────────────────────────────────
     # st.markdown("### 🪟 Smart Window-Opening Planner")
     # st.caption("Should you open your windows right now? Based on inside vs outside AQI estimate.")
@@ -2997,7 +2978,7 @@ elif feature == "🏃 Outdoor Activity Planner":
     #     st.info("🔄 Air quality is similar indoors and outdoors. Your call.")
     # else:
     #     st.warning("🚪 **Keep windows closed.** Outside air is significantly worse than inside.")
-
+ 
     # ── EXPOSURE DURATION CALCULATOR ─────────────────────────────────────────
     st.markdown("### ⏱️ How Long Can You Stay Outside Safely?")
     st.caption("Based on your activity intensity and current AQI.")
@@ -3025,9 +3006,9 @@ elif feature == "🏃 Outdoor Activity Planner":
         base_minutes = 15
     else:
         base_minutes = 0
-
+ 
     safe_minutes = max(0, int(base_minutes / multiplier))
-
+ 
     if safe_minutes == 0:
         st.error("🚫 **0 minutes recommended.** AQI is dangerously high. Stay indoors.")
     elif safe_minutes <= 15:
@@ -3036,7 +3017,7 @@ elif feature == "🏃 Outdoor Activity Planner":
         st.info(f"🕒 **Up to {safe_minutes} minutes** is acceptable. Take breaks.")
     else:
         st.success(f"✅ **Up to {safe_minutes} minutes** is safe for this activity today.")
-
+ 
     # ── MASK RECOMMENDATION ENGINE ────────────────────────────────────────────
     st.markdown("### 😷 Mask Recommendation")
     act_name = activity.split(" ", 1)[1] if " " in activity else activity
@@ -3060,7 +3041,7 @@ elif feature == "🏃 Outdoor Activity Planner":
         """, unsafe_allow_html=True)
     if aqi > 300:
         st.error("🚨 N99 / P100 mask strongly recommended. AQI is at POOR/SEVERE level.")
-
+ 
     # ── ACTIVITY-SPECIFIC HEALTH TIPS ─────────────────────────────────────────
     st.markdown("### 💡 Activity-Specific Health Tips")
     tips_map = {
@@ -3104,7 +3085,7 @@ elif feature == "🏃 Outdoor Activity Planner":
     tips_list = tips_map.get(activity, ["Stay informed and listen to your body."])
     for tip in tips_list:
         st.markdown(f"- {tip}")
-
+ 
     # ── WEATHER IMPACT PANEL ──────────────────────────────────────────────────
     if weather:
         st.markdown("### 🌦️ How Today's Weather Affects Your Activity")
@@ -3153,7 +3134,7 @@ elif feature == "🏃 Outdoor Activity Planner":
             <div style="font-size:13px;margin-top:6px;color:#374151;">{temp_verdict[0]}<br>{temp_verdict[1]}</div>
         </div>
         """, unsafe_allow_html=True)
-
+ 
     # ── NEARBY INDOOR ALTERNATIVE SUGGESTIONS ─────────────────────────────────
     st.markdown("### 🏢 Can't Go Outside? Indoor Alternatives")
     alt_map = {
@@ -3173,7 +3154,7 @@ elif feature == "🏃 Outdoor Activity Planner":
             {alt}
         </div>
         """, unsafe_allow_html=True)
-
+ 
     # ── ALL ACTIVITIES SAFETY TABLE (kept, it's useful) ─────────────────────
     st.markdown("### 📋 All Activities — Today's AQI Safety")
     rows = []

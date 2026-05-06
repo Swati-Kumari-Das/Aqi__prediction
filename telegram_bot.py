@@ -645,7 +645,8 @@
 
 #######################################################################################################
 """
-telegram_bot.py — Fixed version
+telegram_bot.py
+Background worker for Render. Command: python telegram_bot.py
 """
 
 import requests
@@ -674,7 +675,6 @@ IST      = pytz.timezone("Asia/Kolkata")
 # Handles /cmd, /cmd@botname, /CMD
 # =========================================
 def parse_command(text):
-    """Returns (command_str, args_str) or (None, None). Command is lowercased, @botname stripped."""
     if not text or not text.startswith("/"):
         return None, None
     parts   = text[1:].split(None, 1)
@@ -687,12 +687,12 @@ def parse_command(text):
 
 # =========================================
 # LOAD / SAVE SUBSCRIPTIONS
-# Auto-migrates old list format to string
 # =========================================
 def load_users():
     try:
         with open(SUB_FILE, "r") as f:
             data = json.load(f)
+        # Migrate old list format {"id": ["City"]} -> {"id": "City"}
         migrated = False
         for k, v in list(data.items()):
             if isinstance(v, list):
@@ -785,7 +785,6 @@ def fetch_weather(city):
 
 # =========================================
 # BUILD RICH MESSAGE — plain text only
-# (no Markdown/HTML to avoid send failures)
 # =========================================
 def build_rich_message(city_name, aqi_val, raw_data, weather_data, is_scheduled=False):
     now_ist = datetime.now(IST).strftime("%d %b %Y, %I:%M %p IST")
@@ -847,25 +846,21 @@ def build_rich_message(city_name, aqi_val, raw_data, weather_data, is_scheduled=
     lines = [
         f"AQI Alert - {city_name.upper()}",
         f"Date: {now_ist}",
-        divider,
-        "",
+        divider, "",
         f"{cat_emoji}  AQI: {aqi_val}  ({cat_label})",
-        "",
-        "Advice:",
+        "", "Advice:",
     ]
     for tip in advice:
         lines.append(f"  - {tip}")
     lines += [
         "",
         f"Best time outdoors: {outdoor_time}",
-        "",
-        "Pollutants:",
+        "", "Pollutants:",
         pollutant_lines.rstrip(),
     ]
     if weather_lines:
         lines.append(weather_lines.rstrip())
     lines += [divider, footer, "Powered by AQI Monitor App"]
-
     return "\n".join(lines)
 
 
@@ -894,7 +889,7 @@ def send_message(chat_id, text):
 def send_instant_alert(chat_id, city):
     aqi, raw = fetch_aqi(city)
     if aqi is None:
-        send_message(chat_id, f"Could not fetch AQI for '{city}'. Please check the city spelling and try again.")
+        send_message(chat_id, f"Could not fetch AQI for '{city}'. Please check the city name and try again.")
         return
     weather = fetch_weather(city)
     msg     = build_rich_message(city, aqi, raw, weather, is_scheduled=False)
@@ -902,7 +897,8 @@ def send_instant_alert(chat_id, city):
 
 
 # =========================================
-# SCHEDULED ALERT — all subscribers
+# SCHEDULED ALERT
+# Each user gets AQI for THEIR OWN city
 # =========================================
 def send_alert_to_all():
     users = load_users()
@@ -922,11 +918,42 @@ def send_alert_to_all():
 
 
 # =========================================
+# FLUSH PENDING UPDATES ON STARTUP
+# This prevents duplicate messages when
+# Render redeploys (old + new both running)
+# =========================================
+def flush_pending_updates():
+    """
+    Call getUpdates with offset=-1 to acknowledge all
+    pending messages before we start processing new ones.
+    This stops old/queued messages from being re-processed
+    on every redeploy.
+    """
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
+    try:
+        # Get all pending updates
+        res = requests.get(url, params={"timeout": 0}, timeout=10).json()
+        updates = res.get("result", [])
+        if updates:
+            last_id = updates[-1]["update_id"]
+            # Acknowledge all of them by setting offset to last+1
+            requests.get(url, params={"offset": last_id + 1, "timeout": 0}, timeout=10)
+            print(f"[startup] Flushed {len(updates)} pending update(s). Starting fresh.")
+        else:
+            print("[startup] No pending updates. Starting clean.")
+    except Exception as e:
+        print(f"[startup] Could not flush updates: {e}")
+
+
+# =========================================
 # TELEGRAM LONG POLLING
 # =========================================
 def handle_updates():
+    # IMPORTANT: flush old/duplicate updates before starting
+    flush_pending_updates()
+
     last_update_id = None
-    print("Bot started. Listening for messages...")
+    print("Bot listening for new messages...")
 
     while True:
         try:
@@ -938,8 +965,7 @@ def handle_updates():
             res = requests.get(url, params=params, timeout=40).json()
 
             for update in res.get("result", []):
-
-                # Advance offset FIRST — bad update can never cause infinite retry
+                # Advance offset FIRST — bad update never causes infinite retry
                 last_update_id = update["update_id"]
 
                 try:
@@ -954,9 +980,8 @@ def handle_updates():
                     print(f"[{chat_id}] {first_name}: {raw_text!r}")
 
                     cmd, args = parse_command(raw_text)
-
                     if cmd is None:
-                        continue   # Not a command — ignore
+                        continue  # Not a command, ignore
 
                     # /start
                     if cmd == "start":
@@ -965,7 +990,7 @@ def handle_updates():
                             f"Hi {first_name}! Welcome to AQI Monitor Bot.\n\n"
                             "Commands:\n"
                             "  /subscribe <city>   - subscribe + get instant AQI\n"
-                            "  /changecity <city>  - change your subscribed city\n"
+                            "  /changecity <city>  - change your city\n"
                             "  /unsubscribe        - stop daily alerts\n"
                             "  /aqi                - get current AQI for your city\n\n"
                             "Example: /subscribe Delhi"
@@ -1038,7 +1063,7 @@ def handle_updates():
 # SCHEDULER — 8:00 AM IST = 02:30 UTC
 # =========================================
 def run_scheduler():
-    schedule.every().day.at("09:15").do(send_alert_to_all)
+    schedule.every().day.at("09:55").do(send_alert_to_all)
     now_ist = datetime.now(IST).strftime("%d %b %Y %I:%M %p IST")
     print(f"Scheduler ready. Daily alert at 8:00 AM IST. Now: {now_ist}")
     while True:
