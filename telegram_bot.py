@@ -644,6 +644,7 @@
 
 
 #######################################################################################################
+
 """
 telegram_bot.py
 Background worker for Render. Command: python telegram_bot.py
@@ -666,8 +667,18 @@ BOT_TOKEN       = os.getenv("BOT_TOKEN")
 AQICN_API       = os.getenv("AQICN_API_KEY")
 OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY")
 
-SUB_FILE = "subscriptions.json"
-IST      = pytz.timezone("Asia/Kolkata")
+# =========================================
+# JSONBIN — replaces subscriptions.json
+# =========================================
+JSONBIN_BIN_ID  = os.getenv("JSONBIN_BIN_ID")
+JSONBIN_API_KEY = os.getenv("JSONBIN_API_KEY")
+JSONBIN_URL     = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
+JSONBIN_HEADERS = {
+    "X-Master-Key": JSONBIN_API_KEY,
+    "Content-Type": "application/json"
+}
+
+IST = pytz.timezone("Asia/Kolkata")
 
 
 # =========================================
@@ -686,29 +697,31 @@ def parse_command(text):
 
 
 # =========================================
-# LOAD / SAVE SUBSCRIPTIONS
+# LOAD / SAVE SUBSCRIPTIONS — via JSONBin
 # =========================================
 def load_users():
     try:
-        with open(SUB_FILE, "r") as f:
-            data = json.load(f)
-        # Migrate old list format {"id": ["City"]} -> {"id": "City"}
-        migrated = False
-        for k, v in list(data.items()):
-            if isinstance(v, list):
-                data[k] = v[0] if v else ""
-                migrated = True
-        if migrated:
-            save_users(data)
-            print("[load_users] Migrated old list format.")
-        return data
-    except Exception:
+        res = requests.get(
+            JSONBIN_URL + "/latest",
+            headers=JSONBIN_HEADERS,
+            timeout=10
+        )
+        return res.json().get("record", {})
+    except Exception as e:
+        print(f"[load_users] JSONBin error: {e}")
         return {}
 
 
 def save_users(data):
-    with open(SUB_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+    try:
+        requests.put(
+            JSONBIN_URL,
+            json=data,
+            headers=JSONBIN_HEADERS,
+            timeout=10
+        )
+    except Exception as e:
+        print(f"[save_users] JSONBin error: {e}")
 
 
 def subscribe_user(chat_id, city):
@@ -919,24 +932,14 @@ def send_alert_to_all():
 
 # =========================================
 # FLUSH PENDING UPDATES ON STARTUP
-# This prevents duplicate messages when
-# Render redeploys (old + new both running)
 # =========================================
 def flush_pending_updates():
-    """
-    Call getUpdates with offset=-1 to acknowledge all
-    pending messages before we start processing new ones.
-    This stops old/queued messages from being re-processed
-    on every redeploy.
-    """
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
     try:
-        # Get all pending updates
         res = requests.get(url, params={"timeout": 0}, timeout=10).json()
         updates = res.get("result", [])
         if updates:
             last_id = updates[-1]["update_id"]
-            # Acknowledge all of them by setting offset to last+1
             requests.get(url, params={"offset": last_id + 1, "timeout": 0}, timeout=10)
             print(f"[startup] Flushed {len(updates)} pending update(s). Starting fresh.")
         else:
@@ -949,7 +952,6 @@ def flush_pending_updates():
 # TELEGRAM LONG POLLING
 # =========================================
 def handle_updates():
-    # IMPORTANT: flush old/duplicate updates before starting
     flush_pending_updates()
 
     last_update_id = None
@@ -965,7 +967,6 @@ def handle_updates():
             res = requests.get(url, params=params, timeout=40).json()
 
             for update in res.get("result", []):
-                # Advance offset FIRST — bad update never causes infinite retry
                 last_update_id = update["update_id"]
 
                 try:
@@ -981,9 +982,8 @@ def handle_updates():
 
                     cmd, args = parse_command(raw_text)
                     if cmd is None:
-                        continue  # Not a command, ignore
+                        continue
 
-                    # /start
                     if cmd == "start":
                         send_message(
                             chat_id,
@@ -996,7 +996,6 @@ def handle_updates():
                             "Example: /subscribe Delhi"
                         )
 
-                    # /subscribe
                     elif cmd == "subscribe":
                         if not args:
                             send_message(chat_id, "Please provide a city name.\nExample: /subscribe Delhi")
@@ -1010,7 +1009,6 @@ def handle_updates():
                             send_message(chat_id, f"Subscribed to {city_name}.\nFetching AQI now...")
                         send_instant_alert(chat_id, city_name)
 
-                    # /changecity
                     elif cmd == "changecity":
                         if not args:
                             send_message(chat_id, "Please provide a city name.\nExample: /changecity Mumbai")
@@ -1021,7 +1019,6 @@ def handle_updates():
                         send_message(chat_id, f"City updated from {old_city or 'none'} to {city_name}.\nFetching AQI now...")
                         send_instant_alert(chat_id, city_name)
 
-                    # /unsubscribe
                     elif cmd == "unsubscribe":
                         removed = unsubscribe_user(chat_id)
                         if removed:
@@ -1029,7 +1026,6 @@ def handle_updates():
                         else:
                             send_message(chat_id, "You were not subscribed. Use /subscribe <city> to start.")
 
-                    # /aqi
                     elif cmd == "aqi":
                         city_name = get_user_city(chat_id)
                         if not city_name:
@@ -1060,10 +1056,10 @@ def handle_updates():
 
 
 # =========================================
-# SCHEDULER — 8:00 AM IST = 02:30 UTC
+# SCHEDULER — change time as needed
 # =========================================
 def run_scheduler():
-    schedule.every().day.at("10:50").do(send_alert_to_all)
+    schedule.every().day.at("02:30").do(send_alert_to_all)  # 8:00 AM IST = 02:30 UTC
     now_ist = datetime.now(IST).strftime("%d %b %Y %I:%M %p IST")
     print(f"Scheduler ready. Daily alert at 8:00 AM IST. Now: {now_ist}")
     while True:
