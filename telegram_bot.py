@@ -647,7 +647,7 @@
 
 """
 telegram_bot.py
-Background worker for Render. Command: python telegram_bot.py
+
 """
 
 import requests
@@ -1081,7 +1081,7 @@ def handle_updates():
 def run_scheduler():
 
     # 8:00 AM IST = 02:30 UTC
-    schedule.every().day.at("04:02").do(send_alert_to_all)
+    schedule.every().day.at("16:16").do(send_alert_to_all)
 
     now_ist = datetime.now(IST).strftime("%d %b %Y %I:%M %p IST")
 
