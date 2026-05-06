@@ -919,6 +919,7 @@ def send_alert_to_all():
     """
     try:
         users = load_users()
+        print("Loaded users:", users)
         now   = datetime.now(IST).strftime("%H:%M:%S IST")
         print(f"[{now}] Sending scheduled alerts to {len(users)} user(s)...")
 
@@ -1078,26 +1079,57 @@ def handle_updates():
 # 8:00 AM IST = 02:30 UTC
 # =========================================
 def run_scheduler():
-    # FIX: Was "1:05" — corrected to "02:30" (UTC = IST - 5:30)
-    schedule.every().day.at("13:55").do(send_alert_to_all)
+
+    # 8:00 AM IST = 02:30 UTC
+    schedule.every().day.at("03:50").do(send_alert_to_all)
 
     now_ist = datetime.now(IST).strftime("%d %b %Y %I:%M %p IST")
-    print(f"Scheduler ready. Daily alert at 8:00 AM IST (02:30 UTC). Now: {now_ist}")
+
+    print(f"Scheduler ready.")
+    print(f"Current IST Time: {now_ist}")
+    print("Daily AQI alerts scheduled for 8:00 AM IST")
 
     while True:
         try:
             schedule.run_pending()
         except Exception as e:
-            # Prevent scheduler loop from dying on unexpected errors
             print(f"[run_scheduler] Error: {e}")
+
         time.sleep(30)
 
 
 # =========================================
 # HEALTH SERVER (Render requirement)
 # =========================================
+# class HealthHandler(BaseHTTPRequestHandler):
+#     def do_GET(self):
+#         self.send_response(200)
+#         self.end_headers()
+#         self.wfile.write(b"AQI Bot Running")
+
+#     def log_message(self, *args):
+#         pass
+
 class HealthHandler(BaseHTTPRequestHandler):
+
     def do_GET(self):
+
+        # Trigger alerts manually from cron-job.org
+        if self.path == "/send-alerts":
+
+            print("Manual alert trigger received...")
+
+            threading.Thread(
+                target=send_alert_to_all,
+                daemon=True
+            ).start()
+
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"Alerts triggered successfully")
+            return
+
+        # Default health route
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"AQI Bot Running")
