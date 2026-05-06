@@ -1081,7 +1081,7 @@ def handle_updates():
 def run_scheduler():
 
     # 8:00 AM IST = 02:30 UTC
-    schedule.every().day.at("03:50").do(send_alert_to_all)
+    schedule.every().day.at("04:02").do(send_alert_to_all)
 
     now_ist = datetime.now(IST).strftime("%d %b %Y %I:%M %p IST")
 
