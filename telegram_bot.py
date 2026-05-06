@@ -647,37 +647,109 @@
 
 """
 telegram_bot.py
+---------------
+Runs as a background worker (e.g. on Render).
+Stores subscribers in a local subscriptions.json file.
+Sends a personalised daily AQI alert at 8:00 AM IST to every subscriber.
 
+Deploy command : python telegram_bot.py
 """
 
+import json
+import os
 import requests
 import schedule
+import threading
 import time
 from datetime import datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
 import pytz
-import os
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 
 load_dotenv()
 
+# =========================================
+# CONFIG
+# =========================================
 BOT_TOKEN       = os.getenv("BOT_TOKEN")
 AQICN_API       = os.getenv("AQICN_API_KEY")
 OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY")
 
-# =========================================
-# JSONBIN — replaces subscriptions.json
-# =========================================
-JSONBIN_BIN_ID  = os.getenv("JSONBIN_BIN_ID")
-JSONBIN_API_KEY = os.getenv("JSONBIN_API_KEY")
-JSONBIN_URL     = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
-JSONBIN_HEADERS = {
-    "X-Master-Key": JSONBIN_API_KEY,
-    "Content-Type": "application/json"
-}
+IST      = pytz.timezone("Asia/Kolkata")
+SUB_FILE = "subscriptions.json"   # lives next to this script
 
-IST = pytz.timezone("Asia/Kolkata")
+
+# =========================================
+# LOCAL FILE STORAGE
+# Format: { "chat_id_string": "CityName", ... }
+# =========================================
+def load_users() -> dict:
+    """
+    Load subscribers from subscriptions.json.
+    Returns an empty dict if the file does not exist yet.
+    """
+    if not os.path.exists(SUB_FILE):
+        print(f"[load_users] {SUB_FILE} not found — starting with empty subscriber list.")
+        return {}
+    try:
+        with open(SUB_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        print(f"[load_users] Loaded {len(data)} subscriber(s) from {SUB_FILE}: {data}")
+        return data
+    except json.JSONDecodeError as e:
+        print(f"[load_users] JSON parse error in {SUB_FILE}: {e} — returning empty dict.")
+        return {}
+    except Exception as e:
+        print(f"[load_users] Unexpected error: {e} — returning empty dict.")
+        return {}
+
+
+def save_users(data: dict) -> None:
+    """
+    Persist the subscriber dict to subscriptions.json.
+    Creates the file if it does not exist.
+    """
+    try:
+        with open(SUB_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        print(f"[save_users] Saved {len(data)} subscriber(s) to {SUB_FILE}: {data}")
+    except Exception as e:
+        print(f"[save_users] Failed to save {SUB_FILE}: {e}")
+
+
+# =========================================
+# SUBSCRIBER HELPERS
+# =========================================
+def subscribe_user(chat_id, city: str) -> None:
+    """Add or update a subscriber's city."""
+    users = load_users()
+    key   = str(chat_id)
+    old   = users.get(key)
+    users[key] = city.strip().capitalize()
+    save_users(users)
+    if old:
+        print(f"[subscribe_user] {key}: city updated {old!r} → {users[key]!r}")
+    else:
+        print(f"[subscribe_user] {key}: new subscriber → {users[key]!r}")
+
+
+def unsubscribe_user(chat_id) -> bool:
+    """Remove a subscriber. Returns True if they were found."""
+    users = load_users()
+    key   = str(chat_id)
+    if key in users:
+        removed_city = users.pop(key)
+        save_users(users)
+        print(f"[unsubscribe_user] {key} ({removed_city!r}) removed.")
+        return True
+    print(f"[unsubscribe_user] {key} not found in subscribers.")
+    return False
+
+
+def get_user_city(chat_id) -> str | None:
+    """Return the subscribed city for a chat_id, or None."""
+    return load_users().get(str(chat_id))
 
 
 # =========================================
@@ -696,64 +768,18 @@ def parse_command(text):
 
 
 # =========================================
-# LOAD / SAVE SUBSCRIPTIONS — via JSONBin
-# =========================================
-def load_users():
-    try:
-        res = requests.get(
-            JSONBIN_URL + "/latest",
-            headers=JSONBIN_HEADERS,
-            timeout=10
-        )
-        return res.json().get("record", {})
-    except Exception as e:
-        print(f"[load_users] JSONBin error: {e}")
-        return {}
-
-
-def save_users(data):
-    try:
-        requests.put(
-            JSONBIN_URL,
-            json=data,
-            headers=JSONBIN_HEADERS,
-            timeout=10
-        )
-    except Exception as e:
-        print(f"[save_users] JSONBin error: {e}")
-
-
-def subscribe_user(chat_id, city):
-    users = load_users()
-    users[str(chat_id)] = city.strip().capitalize()
-    save_users(users)
-
-
-def unsubscribe_user(chat_id):
-    users = load_users()
-    key = str(chat_id)
-    if key in users:
-        del users[key]
-        save_users(users)
-        return True
-    return False
-
-
-def get_user_city(chat_id):
-    return load_users().get(str(chat_id))
-
-
-# =========================================
 # FETCH AQI
 # =========================================
-def fetch_aqi(city):
+def fetch_aqi(city: str):
+    """Returns (aqi_int, raw_dict) or (None, None) on failure."""
     try:
         url = f"https://api.waqi.info/feed/{city}/?token={AQICN_API}"
         res = requests.get(url, timeout=10).json()
         if res["status"] != "ok":
+            print(f"[fetch_aqi] API status not OK for {city!r}: {res.get('data')}")
             return None, None
         iaqi = res["data"]["iaqi"]
-        raw = {
+        raw  = {
             "PM2.5": iaqi.get("pm25", {}).get("v"),
             "PM10":  iaqi.get("pm10", {}).get("v"),
             "NO2":   iaqi.get("no2",  {}).get("v"),
@@ -763,17 +789,20 @@ def fetch_aqi(city):
         }
         vals = [v for v in raw.values() if v is not None]
         if not vals:
+            print(f"[fetch_aqi] No pollutant values returned for {city!r}.")
             return None, None
-        return int(max(vals)), raw
+        aqi = int(max(vals))
+        print(f"[fetch_aqi] {city!r} → AQI {aqi}")
+        return aqi, raw
     except Exception as e:
-        print(f"[fetch_aqi] {city}: {e}")
+        print(f"[fetch_aqi] Exception for {city!r}: {e}")
         return None, None
 
 
 # =========================================
 # FETCH WEATHER
 # =========================================
-def fetch_weather(city):
+def fetch_weather(city: str):
     if not OPENWEATHER_KEY:
         return None
     try:
@@ -783,6 +812,7 @@ def fetch_weather(city):
         )
         res = requests.get(url, timeout=10).json()
         if str(res.get("cod")) != "200":
+            print(f"[fetch_weather] Non-200 for {city!r}: {res.get('message')}")
             return None
         return {
             "temp":      res["main"]["temp"],
@@ -791,29 +821,23 @@ def fetch_weather(city):
             "condition": res["weather"][0]["main"],
         }
     except Exception as e:
-        print(f"[fetch_weather] {city}: {e}")
+        print(f"[fetch_weather] Exception for {city!r}: {e}")
         return None
 
 
 # =========================================
-# BUILD RICH MESSAGE — plain text only
+# BUILD RICH MESSAGE
 # =========================================
 def build_rich_message(city_name, aqi_val, raw_data, weather_data, is_scheduled=False):
     now_ist = datetime.now(IST).strftime("%d %b %Y, %I:%M %p IST")
     divider = "-" * 30
 
-    if aqi_val <= 50:
-        cat_label, cat_emoji = "Good",        "🟢"
-    elif aqi_val <= 100:
-        cat_label, cat_emoji = "Satisfactory","🟡"
-    elif aqi_val <= 200:
-        cat_label, cat_emoji = "Moderate",    "🟠"
-    elif aqi_val <= 300:
-        cat_label, cat_emoji = "Poor",        "🔴"
-    elif aqi_val <= 400:
-        cat_label, cat_emoji = "Very Poor",   "🔴"
-    else:
-        cat_label, cat_emoji = "Severe",      "⚫"
+    if aqi_val <= 50:    cat_label, cat_emoji = "Good",         "🟢"
+    elif aqi_val <= 100: cat_label, cat_emoji = "Satisfactory", "🟡"
+    elif aqi_val <= 200: cat_label, cat_emoji = "Moderate",     "🟠"
+    elif aqi_val <= 300: cat_label, cat_emoji = "Poor",         "🔴"
+    elif aqi_val <= 400: cat_label, cat_emoji = "Very Poor",    "🔴"
+    else:                cat_label, cat_emoji = "Severe",       "⚫"
 
     if aqi_val <= 50:
         advice = ["Air is clean. Enjoy outdoor activities.", "Stay hydrated."]
@@ -826,12 +850,9 @@ def build_rich_message(city_name, aqi_val, raw_data, weather_data, is_scheduled=
     else:
         advice = ["Stay strictly indoors.", "N99 mask even indoors.", "Seek help if breathing issues."]
 
-    if aqi_val <= 100:
-        outdoor_time = "Any time is fine. Morning (6-8 AM) is freshest."
-    elif aqi_val <= 200:
-        outdoor_time = "Early morning (5-7 AM) before traffic peaks."
-    else:
-        outdoor_time = "Not recommended to go outside today."
+    if aqi_val <= 100:   outdoor_time = "Any time is fine. Morning (6-8 AM) is freshest."
+    elif aqi_val <= 200: outdoor_time = "Early morning (5-7 AM) before traffic peaks."
+    else:                outdoor_time = "Not recommended to go outside today."
 
     pollutant_lines = ""
     if raw_data:
@@ -850,7 +871,7 @@ def build_rich_message(city_name, aqi_val, raw_data, weather_data, is_scheduled=
         )
 
     footer = (
-        "Daily alert sent at 8:00 AM IST."
+        "Daily alert — sent at 8:00 AM IST."
         if is_scheduled
         else "You will now receive this alert daily at 8:00 AM IST."
     )
@@ -877,9 +898,9 @@ def build_rich_message(city_name, aqi_val, raw_data, weather_data, is_scheduled=
 
 
 # =========================================
-# SEND MESSAGE — plain text, no parse_mode
+# SEND MESSAGE
 # =========================================
-def send_message(chat_id, text):
+def send_message(chat_id, text: str) -> bool:
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     try:
         r = requests.post(
@@ -888,20 +909,23 @@ def send_message(chat_id, text):
             timeout=15,
         )
         if r.status_code != 200:
-            print(f"[send_message] Failed {chat_id}: {r.status_code} {r.text[:120]}")
+            print(f"[send_message] Failed → {chat_id}: {r.status_code} {r.text[:120]}")
         return r.status_code == 200
     except Exception as e:
-        print(f"[send_message] Exception {chat_id}: {e}")
+        print(f"[send_message] Exception → {chat_id}: {e}")
         return False
 
 
 # =========================================
-# SEND INSTANT ALERT
+# SEND INSTANT ALERT  (on subscribe / /aqi)
 # =========================================
-def send_instant_alert(chat_id, city):
+def send_instant_alert(chat_id, city: str) -> None:
     aqi, raw = fetch_aqi(city)
     if aqi is None:
-        send_message(chat_id, f"Could not fetch AQI for '{city}'. Please check the city name and try again.")
+        send_message(
+            chat_id,
+            f"Could not fetch AQI for '{city}'. Please check the city name and try again."
+        )
         return
     weather = fetch_weather(city)
     msg     = build_rich_message(city, aqi, raw, weather, is_scheduled=False)
@@ -909,52 +933,55 @@ def send_instant_alert(chat_id, city):
 
 
 # =========================================
-# SCHEDULED ALERT
-# Each user gets AQI for THEIR OWN city
+# SCHEDULED ALERT — runs at 8:00 AM IST
 # =========================================
-def send_alert_to_all():
+def send_alert_to_all() -> None:
     """
-    Sends daily 8:00 AM IST AQI alert to every subscribed user for their own city.
-    Wrapped in try/except so one failure never kills the scheduler.
+    Reads subscriptions.json and sends each subscriber the AQI
+    for their own city. One failure never stops the others.
     """
     try:
+        now_ist = datetime.now(IST).strftime("%H:%M:%S IST")
+        print(f"\n[scheduler] Triggered at {now_ist}")
+
         users = load_users()
-        print("Loaded users:", users)
-        now   = datetime.now(IST).strftime("%H:%M:%S IST")
-        print(f"[{now}] Sending scheduled alerts to {len(users)} user(s)...")
+        print(f"[scheduler] {len(users)} subscriber(s) found: {users}")
 
         if not users:
-            print("  No subscribed users. Skipping.")
+            print("[scheduler] No subscribers — skipping.")
             return
 
         for chat_id, city in users.items():
             if not city or not isinstance(city, str):
-                print(f"  SKIP - invalid city for {chat_id}")
+                print(f"[scheduler] SKIP {chat_id} — invalid city value: {city!r}")
                 continue
             try:
+                print(f"[scheduler] Sending to {chat_id} ({city!r})...")
                 aqi, raw = fetch_aqi(city)
                 if aqi is None:
-                    print(f"  SKIP - no AQI for {city} ({chat_id})")
+                    print(f"[scheduler] SKIP {chat_id} — no AQI data for {city!r}")
                     continue
                 weather = fetch_weather(city)
                 msg     = build_rich_message(city, aqi, raw, weather, is_scheduled=True)
                 ok      = send_message(chat_id, msg)
-                print(f"  {'OK' if ok else 'FAIL'} -> {chat_id} ({city})")
-            except Exception as user_e:
-                # Never let one user's failure stop others from getting alerts
-                print(f"  ERROR for {chat_id} ({city}): {user_e}")
+                print(f"[scheduler] {'OK' if ok else 'FAIL'} → {chat_id} ({city!r})")
+            except Exception as user_err:
+                # Never let one user's failure stop the rest
+                print(f"[scheduler] ERROR for {chat_id} ({city!r}): {user_err}")
 
-    except Exception as e:
-        print(f"[send_alert_to_all] Outer error: {e}")
+        print(f"[scheduler] Done.\n")
+
+    except Exception as outer_err:
+        print(f"[scheduler] Outer error: {outer_err}")
 
 
 # =========================================
 # FLUSH PENDING UPDATES ON STARTUP
 # =========================================
-def flush_pending_updates():
+def flush_pending_updates() -> None:
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
     try:
-        res = requests.get(url, params={"timeout": 0}, timeout=10).json()
+        res     = requests.get(url, params={"timeout": 0}, timeout=10).json()
         updates = res.get("result", [])
         if updates:
             last_id = updates[-1]["update_id"]
@@ -969,11 +996,11 @@ def flush_pending_updates():
 # =========================================
 # TELEGRAM LONG POLLING
 # =========================================
-def handle_updates():
+def handle_updates() -> None:
     flush_pending_updates()
 
     last_update_id = None
-    print("Bot listening for new messages...")
+    print("[bot] Listening for messages...")
 
     while True:
         try:
@@ -1002,56 +1029,91 @@ def handle_updates():
                     if cmd is None:
                         continue
 
+                    # ── /start ──────────────────────────────────────────────
                     if cmd == "start":
                         send_message(
                             chat_id,
                             f"Hi {first_name}! Welcome to AQI Monitor Bot.\n\n"
                             "Commands:\n"
-                            "  /subscribe <city>   - subscribe + get instant AQI\n"
-                            "  /changecity <city>  - change your city\n"
-                            "  /unsubscribe        - stop daily alerts\n"
-                            "  /aqi                - get current AQI for your city\n\n"
+                            "  /subscribe <city>   — subscribe + get instant AQI\n"
+                            "  /changecity <city>  — change your subscribed city\n"
+                            "  /unsubscribe        — stop daily alerts\n"
+                            "  /aqi                — get current AQI for your city\n\n"
                             "Example: /subscribe Delhi"
                         )
 
+                    # ── /subscribe <city> ────────────────────────────────────
                     elif cmd == "subscribe":
                         if not args:
-                            send_message(chat_id, "Please provide a city name.\nExample: /subscribe Delhi")
+                            send_message(
+                                chat_id,
+                                "Please provide a city name.\nExample: /subscribe Delhi"
+                            )
                             continue
-                        city_name = args.capitalize()
+                        city_name = args.strip().capitalize()
                         old_city  = get_user_city(chat_id)
-                        subscribe_user(chat_id, city_name)
+                        subscribe_user(chat_id, city_name)          # saves immediately
                         if old_city and old_city != city_name:
-                            send_message(chat_id, f"City changed from {old_city} to {city_name}.\nFetching AQI now...")
+                            send_message(
+                                chat_id,
+                                f"City changed from {old_city} to {city_name}.\n"
+                                "Fetching AQI now..."
+                            )
                         else:
-                            send_message(chat_id, f"Subscribed to {city_name}.\nFetching AQI now...")
+                            send_message(
+                                chat_id,
+                                f"Subscribed to {city_name}!\n"
+                                "You will get daily alerts at 8:00 AM IST.\n"
+                                "Fetching AQI now..."
+                            )
                         send_instant_alert(chat_id, city_name)
 
+                    # ── /changecity <city> ───────────────────────────────────
                     elif cmd == "changecity":
                         if not args:
-                            send_message(chat_id, "Please provide a city name.\nExample: /changecity Mumbai")
+                            send_message(
+                                chat_id,
+                                "Please provide a city name.\nExample: /changecity Mumbai"
+                            )
                             continue
-                        city_name = args.capitalize()
+                        city_name = args.strip().capitalize()
                         old_city  = get_user_city(chat_id)
-                        subscribe_user(chat_id, city_name)
-                        send_message(chat_id, f"City updated from {old_city or 'none'} to {city_name}.\nFetching AQI now...")
+                        subscribe_user(chat_id, city_name)          # updates existing entry
+                        send_message(
+                            chat_id,
+                            f"City updated from {old_city or 'none'} to {city_name}.\n"
+                            "Fetching AQI now..."
+                        )
                         send_instant_alert(chat_id, city_name)
 
+                    # ── /unsubscribe ─────────────────────────────────────────
                     elif cmd == "unsubscribe":
                         removed = unsubscribe_user(chat_id)
                         if removed:
-                            send_message(chat_id, "You have been unsubscribed from daily AQI alerts.\nSend /subscribe <city> to re-subscribe anytime.")
+                            send_message(
+                                chat_id,
+                                "You have been unsubscribed from daily AQI alerts.\n"
+                                "Send /subscribe <city> to re-subscribe anytime."
+                            )
                         else:
-                            send_message(chat_id, "You were not subscribed. Use /subscribe <city> to start.")
+                            send_message(
+                                chat_id,
+                                "You were not subscribed. Use /subscribe <city> to start."
+                            )
 
+                    # ── /aqi ─────────────────────────────────────────────────
                     elif cmd == "aqi":
                         city_name = get_user_city(chat_id)
                         if not city_name:
-                            send_message(chat_id, "You are not subscribed yet.\nUse /subscribe <city> first.")
+                            send_message(
+                                chat_id,
+                                "You are not subscribed yet.\nUse /subscribe <city> first."
+                            )
                         else:
                             send_message(chat_id, f"Fetching current AQI for {city_name}...")
                             send_instant_alert(chat_id, city_name)
 
+                    # ── unknown ───────────────────────────────────────────────
                     else:
                         send_message(
                             chat_id,
@@ -1075,73 +1137,53 @@ def handle_updates():
 
 # =========================================
 # SCHEDULER
-# Render servers run in UTC.
-# 8:00 AM IST = 02:30 UTC
+# Render servers run UTC.
+# 8:00 AM IST  =  02:30 UTC
 # =========================================
-def run_scheduler():
-
-    # 8:00 AM IST = 02:30 UTC
-    schedule.every().day.at("16:25").do(send_alert_to_all)
+def run_scheduler() -> None:
+    schedule.every().day.at("17:00").do(send_alert_to_all)
 
     now_ist = datetime.now(IST).strftime("%d %b %Y %I:%M %p IST")
-
-    print(f"Scheduler ready.")
-    print(f"Current IST Time: {now_ist}")
-    print("Daily AQI alerts scheduled for 8:00 AM IST")
+    print(f"[scheduler] Ready. Current time: {now_ist}")
+    print("[scheduler] Daily alerts scheduled at 8:00 AM IST (02:30 UTC).")
 
     while True:
         try:
             schedule.run_pending()
         except Exception as e:
-            print(f"[run_scheduler] Error: {e}")
-
+            print(f"[scheduler] run_pending error: {e}")
         time.sleep(30)
 
 
 # =========================================
-# HEALTH SERVER (Render requirement)
+# HEALTH / MANUAL-TRIGGER HTTP SERVER
+# Required by Render to detect an open port.
+# cron-job.org can hit /send-alerts to force
+# an immediate scheduled send.
 # =========================================
-# class HealthHandler(BaseHTTPRequestHandler):
-#     def do_GET(self):
-#         self.send_response(200)
-#         self.end_headers()
-#         self.wfile.write(b"AQI Bot Running")
-
-#     def log_message(self, *args):
-#         pass
-
 class HealthHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
-
-        # Trigger alerts manually from cron-job.org
         if self.path == "/send-alerts":
-
-            print("Manual alert trigger received...")
-
-            threading.Thread(
-                target=send_alert_to_all,
-                daemon=True
-            ).start()
-
+            print("[health-server] Manual /send-alerts trigger received.")
+            threading.Thread(target=send_alert_to_all, daemon=True).start()
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"Alerts triggered successfully")
             return
 
-        # Default health route
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"AQI Bot Running")
 
     def log_message(self, *args):
-        pass
+        pass   # suppress default Apache-style access logs
 
 
-def run_health_server():
+def run_health_server() -> None:
     port   = int(os.environ.get("PORT", 8080))
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
-    print(f"Health server on port {port}")
+    print(f"[health-server] Listening on port {port}.")
     server.serve_forever()
 
 
@@ -1149,6 +1191,13 @@ def run_health_server():
 # MAIN
 # =========================================
 if __name__ == "__main__":
+    print("=" * 50)
+    print("AQI Monitor Telegram Bot — starting up")
+    print("=" * 50)
+
+    # Pre-load users so the initial log shows who's already subscribed
+    load_users()
+
     threading.Thread(target=run_scheduler,  daemon=True).start()
     threading.Thread(target=handle_updates, daemon=True).start()
-    run_health_server()
+    run_health_server()   # blocks main thread — keep last
