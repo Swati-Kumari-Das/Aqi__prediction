@@ -1059,7 +1059,7 @@ def handle_updates():
 # SCHEDULER — change time as needed
 # =========================================
 def run_scheduler():
-    schedule.every().day.at("12:00 ").do(send_alert_to_all)  # 8:00 AM IST = 02:30 UTC
+    schedule.every().day.at("12:17").do(send_alert_to_all)  # 8:00 AM IST = 02:30 UTC
     now_ist = datetime.now(IST).strftime("%d %b %Y %I:%M %p IST")
     print(f"Scheduler ready. Daily alert at 8:00 AM IST. Now: {now_ist}")
     while True:
