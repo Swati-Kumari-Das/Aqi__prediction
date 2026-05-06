@@ -644,7 +644,6 @@
 
 
 #######################################################################################################
-
 """
 telegram_bot.py
 ---------------
@@ -678,6 +677,10 @@ OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY")
 
 IST      = pytz.timezone("Asia/Kolkata")
 SUB_FILE = "subscriptions.json"   # lives next to this script
+
+# Prevents send_alert_to_all() from running twice simultaneously
+# (e.g. scheduler fires at the same moment as a /send-alerts HTTP hit)
+_alert_lock = threading.Lock()
 
 
 # =========================================
@@ -726,7 +729,9 @@ def subscribe_user(chat_id, city: str) -> None:
     users = load_users()
     key   = str(chat_id)
     old   = users.get(key)
-    users[key] = city.strip().capitalize()
+    # Use .title() so "new delhi" → "New Delhi", "noida" → "Noida"
+    # .capitalize() would give "New delhi" (wrong for multi-word cities)
+    users[key] = city.strip().title()
     save_users(users)
     if old:
         print(f"[subscribe_user] {key}: city updated {old!r} → {users[key]!r}")
@@ -771,12 +776,16 @@ def parse_command(text):
 # FETCH AQI
 # =========================================
 def fetch_aqi(city: str):
-    """Returns (aqi_int, raw_dict) or (None, None) on failure."""
-    try:
-        url = f"https://api.waqi.info/feed/{city}/?token={AQICN_API}"
+    """
+    Returns (aqi_int, raw_dict) or (None, None) on failure.
+    Tries the city name as-is first, then lowercase as a fallback,
+    because the AQICN API is case-sensitive for some city slugs
+    (e.g. 'Noida' may fail but 'noida' works).
+    """
+    def _try(city_slug):
+        url = f"https://api.waqi.info/feed/{city_slug}/?token={AQICN_API}"
         res = requests.get(url, timeout=10).json()
         if res["status"] != "ok":
-            print(f"[fetch_aqi] API status not OK for {city!r}: {res.get('data')}")
             return None, None
         iaqi = res["data"]["iaqi"]
         raw  = {
@@ -789,11 +798,21 @@ def fetch_aqi(city: str):
         }
         vals = [v for v in raw.values() if v is not None]
         if not vals:
-            print(f"[fetch_aqi] No pollutant values returned for {city!r}.")
             return None, None
-        aqi = int(max(vals))
-        print(f"[fetch_aqi] {city!r} → AQI {aqi}")
-        return aqi, raw
+        return int(max(vals)), raw
+
+    try:
+        aqi, raw = _try(city)
+        if aqi is not None:
+            print(f"[fetch_aqi] {city!r} → AQI {aqi}")
+            return aqi, raw
+        # Fallback: try lowercase (AQICN slugs are usually lowercase)
+        aqi, raw = _try(city.lower())
+        if aqi is not None:
+            print(f"[fetch_aqi] {city!r} (lowercase fallback) → AQI {aqi}")
+            return aqi, raw
+        print(f"[fetch_aqi] API returned no data for {city!r} (tried both casings).")
+        return None, None
     except Exception as e:
         print(f"[fetch_aqi] Exception for {city!r}: {e}")
         return None, None
@@ -1050,7 +1069,7 @@ def handle_updates() -> None:
                                 "Please provide a city name.\nExample: /subscribe Delhi"
                             )
                             continue
-                        city_name = args.strip().capitalize()
+                        city_name = args.strip().title()
                         old_city  = get_user_city(chat_id)
                         subscribe_user(chat_id, city_name)          # saves immediately
                         if old_city and old_city != city_name:
@@ -1076,7 +1095,7 @@ def handle_updates() -> None:
                                 "Please provide a city name.\nExample: /changecity Mumbai"
                             )
                             continue
-                        city_name = args.strip().capitalize()
+                        city_name = args.strip().title()
                         old_city  = get_user_city(chat_id)
                         subscribe_user(chat_id, city_name)          # updates existing entry
                         send_message(
@@ -1141,7 +1160,7 @@ def handle_updates() -> None:
 # 8:00 AM IST  =  02:30 UTC
 # =========================================
 def run_scheduler() -> None:
-    schedule.every().day.at("17:00").do(send_alert_to_all)
+    schedule.every().day.at("17:30").do(send_alert_to_all)
 
     now_ist = datetime.now(IST).strftime("%d %b %Y %I:%M %p IST")
     print(f"[scheduler] Ready. Current time: {now_ist}")
