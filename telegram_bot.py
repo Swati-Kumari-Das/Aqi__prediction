@@ -659,7 +659,6 @@ import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
-import json
 
 load_dotenv()
 
@@ -914,20 +913,38 @@ def send_instant_alert(chat_id, city):
 # Each user gets AQI for THEIR OWN city
 # =========================================
 def send_alert_to_all():
-    users = load_users()
-    now   = datetime.now(IST).strftime("%H:%M:%S IST")
-    print(f"[{now}] Sending scheduled alerts to {len(users)} user(s)...")
-    for chat_id, city in users.items():
-        if not city or not isinstance(city, str):
-            continue
-        aqi, raw = fetch_aqi(city)
-        if aqi is None:
-            print(f"  SKIP - no AQI for {city} ({chat_id})")
-            continue
-        weather = fetch_weather(city)
-        msg     = build_rich_message(city, aqi, raw, weather, is_scheduled=True)
-        ok      = send_message(chat_id, msg)
-        print(f"  {'OK' if ok else 'FAIL'} -> {chat_id} ({city})")
+    """
+    Sends daily 8:00 AM IST AQI alert to every subscribed user for their own city.
+    Wrapped in try/except so one failure never kills the scheduler.
+    """
+    try:
+        users = load_users()
+        now   = datetime.now(IST).strftime("%H:%M:%S IST")
+        print(f"[{now}] Sending scheduled alerts to {len(users)} user(s)...")
+
+        if not users:
+            print("  No subscribed users. Skipping.")
+            return
+
+        for chat_id, city in users.items():
+            if not city or not isinstance(city, str):
+                print(f"  SKIP - invalid city for {chat_id}")
+                continue
+            try:
+                aqi, raw = fetch_aqi(city)
+                if aqi is None:
+                    print(f"  SKIP - no AQI for {city} ({chat_id})")
+                    continue
+                weather = fetch_weather(city)
+                msg     = build_rich_message(city, aqi, raw, weather, is_scheduled=True)
+                ok      = send_message(chat_id, msg)
+                print(f"  {'OK' if ok else 'FAIL'} -> {chat_id} ({city})")
+            except Exception as user_e:
+                # Never let one user's failure stop others from getting alerts
+                print(f"  ERROR for {chat_id} ({city}): {user_e}")
+
+    except Exception as e:
+        print(f"[send_alert_to_all] Outer error: {e}")
 
 
 # =========================================
@@ -1056,14 +1073,23 @@ def handle_updates():
 
 
 # =========================================
-# SCHEDULER — change time as needed
+# SCHEDULER
+# Render servers run in UTC.
+# 8:00 AM IST = 02:30 UTC
 # =========================================
 def run_scheduler():
-    schedule.every().day.at("1:05").do(send_alert_to_all)  # 8:00 AM IST = 02:30 UTC
+    # FIX: Was "1:05" — corrected to "02:30" (UTC = IST - 5:30)
+    schedule.every().day.at("14:00").do(send_alert_to_all)
+
     now_ist = datetime.now(IST).strftime("%d %b %Y %I:%M %p IST")
-    print(f"Scheduler ready. Daily alert at 8:00 AM IST. Now: {now_ist}")
+    print(f"Scheduler ready. Daily alert at 8:00 AM IST (02:30 UTC). Now: {now_ist}")
+
     while True:
-        schedule.run_pending()
+        try:
+            schedule.run_pending()
+        except Exception as e:
+            # Prevent scheduler loop from dying on unexpected errors
+            print(f"[run_scheduler] Error: {e}")
         time.sleep(30)
 
 
