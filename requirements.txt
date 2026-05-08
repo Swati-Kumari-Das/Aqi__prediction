@@ -7,3 +7,4 @@ plotly
 schedule
 pytz
 python-dotenv
+supabase
