@@ -1827,3 +1827,4 @@ if __name__ == "__main__":
     threading.Thread(target=run_scheduler,  daemon=True).start()
     threading.Thread(target=handle_updates, daemon=True).start()
     run_health_server()  # blocks main thread — keep last
+    #cha nged
