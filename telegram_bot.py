@@ -1227,439 +1227,589 @@
 
 
 ########################################
+"""
+telegram_bot.py  — Fixed with detailed Supabase diagnostics
+------------------------------------------------------------
+Common causes of "Database error":
+  1. SUPABASE_URL / SUPABASE_KEY not set correctly in Render env vars
+  2. The 'subscribers' table doesn't exist in Supabase
+  3. Row Level Security (RLS) is ON and blocking writes
+  4. Using the wrong key (need anon/public key)
+
+This version prints the exact HTTP status + response body on every
+Supabase failure so you can see the real error in Render logs.
+"""
+
 import os
-import time
 import requests
-from flask import Flask
-from threading import Thread
+import schedule
+import threading
+import time
+from datetime import datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# =========================
-# ENV VARIABLES
-# =========================
+import pytz
+from dotenv import load_dotenv
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-AQICN_API_KEY = os.getenv("AQICN_API_KEY")
-OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY")
+load_dotenv()
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+# =========================================
+# CONFIG  — reads from Render env vars
+# =========================================
+BOT_TOKEN       = os.getenv("BOT_TOKEN", "")
+AQICN_API       = os.getenv("AQICN_API_KEY", "")
+OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY", "")
 
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+# IMPORTANT: use EXACTLY these names in Render → Environment
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
-# =========================
-# SUPABASE HEADERS
-# =========================
-
-headers = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json",
-    "Prefer": "resolution=merge-duplicates"
-}
-
-# =========================
-# FLASK APP
-# =========================
-
-app = Flask(__name__)
-
-# =========================
-# DATABASE FUNCTIONS
-# =========================
-
-def save_user(chat_id, city):
-    try:
-        r = requests.post(
-            f"{SUPABASE_URL}/rest/v1/subscribers?on_conflict=chat_id",
-            headers=headers,
-            json={
-                "chat_id": str(chat_id),
-                "city": city.strip().title()
-            },
-            timeout=10,
-        )
-
-        print("SAVE USER STATUS:", r.status_code)
-        print("SAVE USER RESPONSE:", r.text)
-
-        return r.status_code in [200, 201]
-
-    except Exception as e:
-        print("SAVE USER ERROR:", e)
-        return False
+IST = pytz.timezone("Asia/Kolkata")
 
 
-def get_user_city(chat_id):
+# =========================================
+# STARTUP DIAGNOSTICS
+# =========================================
+def run_startup_checks():
+    print("\n" + "=" * 55)
+    print("STARTUP DIAGNOSTICS")
+    print("=" * 55)
+
+    vars_to_check = {
+        "BOT_TOKEN":       BOT_TOKEN,
+        "AQICN_API_KEY":   AQICN_API,
+        "OPENWEATHER_KEY": OPENWEATHER_KEY,
+        "SUPABASE_URL":    SUPABASE_URL,
+        "SUPABASE_KEY":    SUPABASE_KEY,
+    }
+    for name, val in vars_to_check.items():
+        if val:
+            masked = val[:10] + "..." if len(val) > 10 else val
+            print(f"  OK  {name} = {masked}")
+        else:
+            print(f"  MISSING  {name} -- NOT SET in Render environment!")
+
+    print("\n[Supabase] Testing connection...")
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("  SKIP -- SUPABASE_URL or SUPABASE_KEY missing")
+        print("=" * 55 + "\n")
+        return
+
+    headers = {
+        "apikey":        SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type":  "application/json",
+    }
     try:
         r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/subscribers?chat_id=eq.{chat_id}",
+            f"{SUPABASE_URL}/rest/v1/subscribers?select=chat_id,city&limit=5",
             headers=headers,
             timeout=10,
         )
-
-        data = r.json()
-
-        if data:
-            return data[0]["city"]
-
-        return None
-
+        if r.status_code == 200:
+            rows = r.json()
+            print(f"  OK  Table 'subscribers' found -- {len(rows)} row(s)")
+            for row in rows:
+                print(f"       chat_id={row['chat_id']}  city={row['city']}")
+        elif r.status_code == 401:
+            print(f"  ERROR  401 Unauthorized -- SUPABASE_KEY is wrong!")
+            print(f"         Response: {r.text[:300]}")
+        else:
+            print(f"  ERROR  {r.status_code}: {r.text[:400]}")
+            if "does not exist" in r.text.lower():
+                print("  Table 'subscribers' missing -- run this SQL in Supabase:")
+                print("  CREATE TABLE subscribers (chat_id TEXT PRIMARY KEY, city TEXT NOT NULL);")
     except Exception as e:
-        print("GET USER CITY ERROR:", e)
-        return None
+        print(f"  ERROR  Cannot reach Supabase: {e}")
+
+    print("=" * 55 + "\n")
 
 
-def update_city(chat_id, new_city):
+# =========================================
+# SUPABASE HELPERS
+# =========================================
+def _sb_headers(upsert=False):
+    h = {
+        "apikey":        SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type":  "application/json",
+        "Prefer":        "return=representation",
+    }
+    if upsert:
+        h["Prefer"] = "resolution=merge-duplicates,return=representation"
+    return h
+
+
+def load_users() -> dict:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("[load_users] Supabase not configured")
+        return {}
     try:
-        r = requests.patch(
-            f"{SUPABASE_URL}/rest/v1/subscribers?chat_id=eq.{chat_id}",
-            headers=headers,
-            json={
-                "city": new_city.strip().title()
-            },
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/subscribers?select=chat_id,city",
+            headers=_sb_headers(),
             timeout=10,
         )
-
-        print("UPDATE CITY STATUS:", r.status_code)
-        print("UPDATE CITY RESPONSE:", r.text)
-
-        return r.status_code in [200, 204]
-
+        if r.status_code == 200:
+            result = {row["chat_id"]: row["city"] for row in r.json()}
+            print(f"[load_users] {len(result)} subscriber(s): {result}")
+            return result
+        print(f"[load_users] ERROR {r.status_code}: {r.text[:300]}")
+        return {}
     except Exception as e:
-        print("UPDATE CITY ERROR:", e)
+        print(f"[load_users] Exception: {e}")
+        return {}
+
+
+def save_user(chat_id, city: str) -> bool:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("[save_user] Supabase not configured")
+        return False
+    try:
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/subscribers",
+            headers=_sb_headers(upsert=True),
+            json={"chat_id": str(chat_id), "city": city.strip().title()},
+            timeout=10,
+        )
+        if r.status_code in (200, 201):
+            print(f"[save_user] OK  chat_id={chat_id} city={city}")
+            return True
+
+        # Full error so we can see in Render logs what went wrong
+        print(f"[save_user] FAILED {r.status_code}: {r.text[:500]}")
+
+        if r.status_code == 403 or "row-level security" in r.text.lower():
+            print("[save_user] RLS is blocking writes!")
+            print("  Fix: Supabase Dashboard -> Table Editor -> subscribers")
+            print("       -> RLS -> Disable Row Level Security")
+            print("  OR run in SQL Editor:")
+            print("       ALTER TABLE subscribers DISABLE ROW LEVEL SECURITY;")
+        elif r.status_code == 401:
+            print("[save_user] Wrong SUPABASE_KEY -- check Render env vars")
+        elif "does not exist" in r.text.lower():
+            print("[save_user] Table 'subscribers' does not exist!")
+            print("  Run in Supabase SQL Editor:")
+            print("  CREATE TABLE subscribers (chat_id TEXT PRIMARY KEY, city TEXT NOT NULL);")
+        return False
+    except Exception as e:
+        print(f"[save_user] Exception: {e}")
         return False
 
 
-def delete_user(chat_id):
+def delete_user(chat_id) -> bool:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
     try:
         r = requests.delete(
             f"{SUPABASE_URL}/rest/v1/subscribers?chat_id=eq.{chat_id}",
-            headers=headers,
+            headers=_sb_headers(),
             timeout=10,
         )
-
-        print("DELETE USER STATUS:", r.status_code)
-
-        return r.status_code in [200, 204]
-
+        ok = r.status_code in (200, 204)
+        print(f"[delete_user] chat_id={chat_id} -> {'OK removed' if ok else f'ERROR {r.status_code}: {r.text[:200]}'}")
+        return ok
     except Exception as e:
-        print("DELETE USER ERROR:", e)
+        print(f"[delete_user] Exception: {e}")
         return False
 
 
-def get_all_users():
+def get_user_city(chat_id) -> str | None:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
     try:
         r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/subscribers",
-            headers=headers,
+            f"{SUPABASE_URL}/rest/v1/subscribers?chat_id=eq.{chat_id}&select=city",
+            headers=_sb_headers(),
             timeout=10,
         )
-
-        return r.json()
-
+        if r.status_code == 200:
+            rows = r.json()
+            return rows[0]["city"] if rows else None
+        print(f"[get_user_city] ERROR {r.status_code}: {r.text[:200]}")
+        return None
     except Exception as e:
-        print("GET ALL USERS ERROR:", e)
-        return []
-
-# =========================
-# TELEGRAM FUNCTIONS
-# =========================
-
-def send_telegram_message(chat_id, text):
-    try:
-        url = f"{TELEGRAM_API}/sendMessage"
-
-        payload = {
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "Markdown"
-        }
-
-        requests.post(url, json=payload, timeout=10)
-
-    except Exception as e:
-        print("TELEGRAM SEND ERROR:", e)
-
-# =========================
-# AQI FUNCTIONS
-# =========================
-
-def fetch_aqi(city):
-    try:
-        url = f"https://api.waqi.info/feed/{city}/?token={AQICN_API_KEY}"
-
-        r = requests.get(url, timeout=10)
-        data = r.json()
-
-        if data["status"] != "ok":
-            return None
-
-        aqi = data["data"]["aqi"]
-
-        return aqi
-
-    except Exception as e:
-        print("AQI FETCH ERROR:", e)
+        print(f"[get_user_city] Exception: {e}")
         return None
 
 
-def get_aqi_category(aqi):
-    if aqi <= 50:
-        return "Good 😊"
-    elif aqi <= 100:
-        return "Moderate 🙂"
-    elif aqi <= 150:
-        return "Unhealthy for Sensitive Groups 😷"
-    elif aqi <= 200:
-        return "Unhealthy ⚠️"
-    elif aqi <= 300:
-        return "Very Unhealthy 🚨"
+# =========================================
+# COMMAND PARSER
+# =========================================
+def parse_command(text):
+    if not text or not text.startswith("/"):
+        return None, None
+    parts   = text[1:].split(None, 1)
+    cmd_raw = parts[0].lower()
+    if "@" in cmd_raw:
+        cmd_raw = cmd_raw.split("@")[0]
+    args = parts[1].strip() if len(parts) > 1 else ""
+    return cmd_raw, args
+
+
+# =========================================
+# FETCH AQI
+# =========================================
+def fetch_aqi(city: str):
+    def _try(slug):
+        url = f"https://api.waqi.info/feed/{slug}/?token={AQICN_API}"
+        res = requests.get(url, timeout=10).json()
+        if res["status"] != "ok":
+            return None, None
+        iaqi = res["data"]["iaqi"]
+        raw = {
+            "PM2.5": iaqi.get("pm25", {}).get("v"),
+            "PM10":  iaqi.get("pm10", {}).get("v"),
+            "NO2":   iaqi.get("no2",  {}).get("v"),
+            "SO2":   iaqi.get("so2",  {}).get("v"),
+            "CO":    iaqi.get("co",   {}).get("v"),
+            "O3":    iaqi.get("o3",   {}).get("v"),
+        }
+        vals = [v for v in raw.values() if v is not None]
+        return (int(max(vals)), raw) if vals else (None, None)
+
+    try:
+        aqi, raw = _try(city)
+        if aqi is not None:
+            return aqi, raw
+        return _try(city.lower())
+    except Exception as e:
+        print(f"[fetch_aqi] Exception for {city!r}: {e}")
+        return None, None
+
+
+# =========================================
+# FETCH WEATHER
+# =========================================
+def fetch_weather(city: str):
+    if not OPENWEATHER_KEY:
+        return None
+    try:
+        url = (
+            f"https://api.openweathermap.org/data/2.5/weather"
+            f"?q={city}&appid={OPENWEATHER_KEY}&units=metric"
+        )
+        res = requests.get(url, timeout=10).json()
+        if str(res.get("cod")) != "200":
+            return None
+        return {
+            "temp":      res["main"]["temp"],
+            "humidity":  res["main"]["humidity"],
+            "wind":      res["wind"]["speed"],
+            "condition": res["weather"][0]["main"],
+        }
+    except Exception as e:
+        print(f"[fetch_weather] Exception for {city!r}: {e}")
+        return None
+
+
+# =========================================
+# BUILD MESSAGE
+# =========================================
+def build_message(city_name, aqi_val, raw_data, weather_data, is_scheduled=False):
+    now_ist = datetime.now(IST).strftime("%d %b %Y, %I:%M %p IST")
+    divider = "-" * 30
+
+    if aqi_val <= 50:    cat_label, cat_emoji = "Good",         "Green"
+    elif aqi_val <= 100: cat_label, cat_emoji = "Satisfactory", "Yellow"
+    elif aqi_val <= 200: cat_label, cat_emoji = "Moderate",     "Orange"
+    elif aqi_val <= 300: cat_label, cat_emoji = "Poor",         "Red"
+    elif aqi_val <= 400: cat_label, cat_emoji = "Very Poor",    "Dark Red"
+    else:                cat_label, cat_emoji = "Severe",       "Black"
+
+    if aqi_val <= 50:
+        advice = ["Air is clean. Enjoy outdoor activities.", "Stay hydrated."]
+    elif aqi_val <= 100:
+        advice = ["Sensitive groups should wear a mask.", "Limit long outdoor stays."]
+    elif aqi_val <= 200:
+        advice = ["Wear N95 mask outdoors.", "Avoid jogging 8-10 AM.", "Use air purifier indoors."]
+    elif aqi_val <= 300:
+        advice = ["Stay indoors as much as possible.", "N95/N99 mask if going out.", "Avoid outdoor exercise."]
     else:
-        return "Hazardous ☠️"
+        advice = ["Stay strictly indoors.", "N99 mask even indoors.", "Seek help if breathing issues."]
+
+    if aqi_val <= 100:   outdoor_time = "Any time is fine. Morning (6-8 AM) is freshest."
+    elif aqi_val <= 200: outdoor_time = "Early morning (5-7 AM) before traffic peaks."
+    else:                outdoor_time = "Not recommended to go outside today."
+
+    pollutant_lines = ""
+    if raw_data:
+        for k, v in raw_data.items():
+            if v is not None:
+                pollutant_lines += f"  {k}: {v}\n"
+
+    weather_lines = ""
+    if weather_data:
+        weather_lines = (
+            f"\nWeather in {city_name}\n"
+            f"  Temp     : {weather_data['temp']} C\n"
+            f"  Humidity : {weather_data['humidity']}%\n"
+            f"  Wind     : {weather_data['wind']} m/s\n"
+            f"  Condition: {weather_data['condition']}\n"
+        )
+
+    footer = (
+        "Daily alert -- sent at 8:00 AM IST."
+        if is_scheduled
+        else "You will now receive this alert daily at 8:00 AM IST."
+    )
+
+    lines = [
+        f"AQI Alert - {city_name.upper()}",
+        f"Date: {now_ist}",
+        divider, "",
+        f"AQI: {aqi_val}  ({cat_label} - {cat_emoji})",
+        "", "Advice:",
+    ]
+    for tip in advice:
+        lines.append(f"  - {tip}")
+    lines += [
+        "", f"Best time outdoors: {outdoor_time}",
+        "", "Pollutants:",
+        pollutant_lines.rstrip(),
+    ]
+    if weather_lines:
+        lines.append(weather_lines.rstrip())
+    lines += [divider, footer, "Powered by AQI Monitor App"]
+    return "\n".join(lines)
 
 
-def get_health_advice(aqi):
-    if aqi <= 50:
-        return "Air quality is good. Safe for outdoor activities."
-    elif aqi <= 100:
-        return "Sensitive people should limit prolonged outdoor exposure."
-    elif aqi <= 150:
-        return "Wear a mask if staying outside for long."
-    elif aqi <= 200:
-        return "Avoid outdoor exercise and wear a mask."
-    elif aqi <= 300:
-        return "Stay indoors as much as possible."
-    else:
-        return "Avoid going outside. Dangerous air quality."
+# =========================================
+# SEND MESSAGE
+# =========================================
+def send_message(chat_id, text: str) -> bool:
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    try:
+        r = requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=15)
+        if r.status_code != 200:
+            print(f"[send_message] FAILED {r.status_code} -> {chat_id}: {r.text[:120]}")
+        return r.status_code == 200
+    except Exception as e:
+        print(f"[send_message] Exception -> {chat_id}: {e}")
+        return False
 
-# =========================
-# ALERT MESSAGE
-# =========================
 
-def build_alert(city, aqi):
-    category = get_aqi_category(aqi)
-    advice = get_health_advice(aqi)
+def send_instant_alert(chat_id, city: str) -> None:
+    aqi, raw = fetch_aqi(city)
+    if aqi is None:
+        send_message(chat_id, f"Could not fetch AQI for '{city}'. Please check the city name.")
+        return
+    weather = fetch_weather(city)
+    msg     = build_message(city, aqi, raw, weather, is_scheduled=False)
+    send_message(chat_id, msg)
 
-    return f"""
-🌫️ *AQI Alert*
 
-📍 City: {city}
-📊 AQI: {aqi}
-⚠️ Category: {category}
-
-💡 Advice:
-{advice}
-"""
-
-# =========================
-# SEND DAILY ALERTS
-# =========================
-
-@app.route("/send-alerts")
-def send_alerts():
-    users = get_all_users()
-
+# =========================================
+# SCHEDULED ALERT — fires once at 8 AM IST
+# =========================================
+def send_alert_to_all() -> None:
+    now_ist = datetime.now(IST).strftime("%d %b %Y %I:%M %p IST")
+    print(f"\n[scheduler] Triggered at {now_ist}")
+    users = load_users()
     if not users:
-        return "No users found"
-
-    for user in users:
+        print("[scheduler] No subscribers.")
+        return
+    for chat_id, city in users.items():
         try:
-            chat_id = user["chat_id"]
-            city = user["city"]
-
-            aqi = fetch_aqi(city)
-
+            aqi, raw = fetch_aqi(city)
             if aqi is None:
+                print(f"[scheduler] SKIP {chat_id} -- no AQI for {city!r}")
                 continue
-
-            msg = build_alert(city, aqi)
-
-            send_telegram_message(chat_id, msg)
-
-            time.sleep(1)
-
+            weather = fetch_weather(city)
+            msg = build_message(city, aqi, raw, weather, is_scheduled=True)
+            ok  = send_message(chat_id, msg)
+            print(f"[scheduler] {'OK' if ok else 'FAIL'} -> {chat_id} ({city!r})")
         except Exception as e:
-            print("SEND ALERT ERROR:", e)
+            print(f"[scheduler] ERROR for {chat_id}: {e}")
+    print("[scheduler] Done.\n")
 
-    return "Alerts sent successfully"
 
-# =========================
-# HOME ROUTE
-# =========================
+# =========================================
+# TELEGRAM LONG POLLING
+# =========================================
+def flush_pending_updates() -> None:
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
+    try:
+        res     = requests.get(url, params={"timeout": 0}, timeout=10).json()
+        updates = res.get("result", [])
+        if updates:
+            last_id = updates[-1]["update_id"]
+            requests.get(url, params={"offset": last_id + 1, "timeout": 0}, timeout=10)
+            print(f"[startup] Flushed {len(updates)} pending update(s).")
+    except Exception as e:
+        print(f"[startup] Flush error: {e}")
 
-@app.route("/")
-def home():
-    return "AQI Telegram Bot is running!"
 
-# =========================
-# TELEGRAM BOT POLLING
-# =========================
-
-def handle_updates():
-    offset = None
+def handle_updates() -> None:
+    flush_pending_updates()
+    last_update_id = None
+    print("[bot] Listening for messages...")
 
     while True:
         try:
-            url = f"{TELEGRAM_API}/getUpdates"
+            url    = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
+            params = {"timeout": 30}
+            if last_update_id is not None:
+                params["offset"] = last_update_id + 1
 
-            params = {
-                "timeout": 100,
-                "offset": offset
-            }
+            res = requests.get(url, params=params, timeout=40).json()
 
-            r = requests.get(url, params=params, timeout=120)
+            for update in res.get("result", []):
+                last_update_id = update["update_id"]
+                try:
+                    message    = update.get("message")
+                    if not message:
+                        continue
+                    chat_id    = message["chat"]["id"]
+                    first_name = message["chat"].get("first_name", "there")
+                    raw_text   = message.get("text", "").strip()
+                    print(f"[{chat_id}] {first_name}: {raw_text!r}")
 
-            data = r.json()
-
-            for update in data["result"]:
-
-                offset = update["update_id"] + 1
-
-                if "message" not in update:
-                    continue
-
-                message = update["message"]
-
-                chat_id = message["chat"]["id"]
-
-                text = message.get("text", "")
-
-                # =========================
-                # /start
-                # =========================
-
-                if text == "/start":
-                    send_telegram_message(
-                        chat_id,
-                        """🌍 Welcome to AQI Alert Bot!
-
-Commands:
-/subscribe <city>
-/changecity <city>
-/unsubscribe
-/mycity
-"""
-                    )
-
-                # =========================
-                # /subscribe
-                # =========================
-
-                elif text.startswith("/subscribe"):
-
-                    parts = text.split(maxsplit=1)
-
-                    if len(parts) < 2:
-                        send_telegram_message(
-                            chat_id,
-                            "Usage: /subscribe Delhi"
-                        )
+                    cmd, args = parse_command(raw_text)
+                    if cmd is None:
                         continue
 
-                    city = parts[1]
+                    if cmd == "start":
+                        send_message(
+                            chat_id,
+                            f"Hi {first_name}! Welcome to AQI Monitor Bot.\n\n"
+                            "Commands:\n"
+                            "  /subscribe <city>   -- subscribe + get instant AQI\n"
+                            "  /changecity <city>  -- change your subscribed city\n"
+                            "  /unsubscribe        -- stop daily alerts\n"
+                            "  /aqi                -- get current AQI for your city\n\n"
+                            "Example: /subscribe Delhi"
+                        )
 
-                    success = save_user(chat_id, city)
-
-                    if success:
-                        aqi = fetch_aqi(city)
-
-                        if aqi is not None:
-                            msg = build_alert(city, aqi)
-                            send_telegram_message(chat_id, msg)
-                        else:
-                            send_telegram_message(
+                    elif cmd == "subscribe":
+                        if not args:
+                            send_message(chat_id, "Please provide a city.\nExample: /subscribe Delhi")
+                            continue
+                        city_name = args.strip().title()
+                        old_city  = get_user_city(chat_id)
+                        ok        = save_user(chat_id, city_name)
+                        if not ok:
+                            send_message(
                                 chat_id,
-                                "Subscribed successfully, but AQI fetch failed."
+                                "Database error. Please try again in a moment.\n"
+                                "If this keeps happening, ask the admin to check Render logs."
                             )
+                            continue
+                        if old_city and old_city != city_name:
+                            send_message(chat_id, f"City updated: {old_city} -> {city_name}\nFetching AQI now...")
+                        else:
+                            send_message(
+                                chat_id,
+                                f"Subscribed to {city_name}!\n"
+                                "You will get daily alerts at 8:00 AM IST.\n"
+                                "Fetching AQI now..."
+                            )
+                        send_instant_alert(chat_id, city_name)
+
+                    elif cmd == "changecity":
+                        if not args:
+                            send_message(chat_id, "Please provide a city.\nExample: /changecity Mumbai")
+                            continue
+                        city_name = args.strip().title()
+                        old_city  = get_user_city(chat_id)
+                        ok        = save_user(chat_id, city_name)
+                        if not ok:
+                            send_message(chat_id, "Database error. Please try again.")
+                            continue
+                        send_message(
+                            chat_id,
+                            f"City updated: {old_city or 'none'} -> {city_name}\nFetching AQI now..."
+                        )
+                        send_instant_alert(chat_id, city_name)
+
+                    elif cmd == "unsubscribe":
+                        removed = delete_user(chat_id)
+                        if removed:
+                            send_message(
+                                chat_id,
+                                "Unsubscribed from daily alerts.\n"
+                                "Send /subscribe <city> to re-subscribe anytime."
+                            )
+                        else:
+                            send_message(chat_id, "You were not subscribed.\nUse /subscribe <city> to start.")
+
+                    elif cmd == "aqi":
+                        city_name = get_user_city(chat_id)
+                        if not city_name:
+                            send_message(chat_id, "You are not subscribed.\nUse /subscribe <city> first.")
+                        else:
+                            send_message(chat_id, f"Fetching AQI for {city_name}...")
+                            send_instant_alert(chat_id, city_name)
+
                     else:
-                        send_telegram_message(
+                        send_message(
                             chat_id,
-                            "Database error. Please try again."
+                            f"Unknown command: /{cmd}\n\n"
+                            "Available:\n"
+                            "  /subscribe <city>\n"
+                            "  /changecity <city>\n"
+                            "  /unsubscribe\n"
+                            "  /aqi"
                         )
 
-                # =========================
-                # /changecity
-                # =========================
+                except Exception as inner_e:
+                    print(f"[handle_updates] Error on update {update.get('update_id')}: {inner_e}")
 
-                elif text.startswith("/changecity"):
-
-                    parts = text.split(maxsplit=1)
-
-                    if len(parts) < 2:
-                        send_telegram_message(
-                            chat_id,
-                            "Usage: /changecity Mumbai"
-                        )
-                        continue
-
-                    new_city = parts[1]
-
-                    success = update_city(chat_id, new_city)
-
-                    if success:
-                        send_telegram_message(
-                            chat_id,
-                            f"✅ City updated to {new_city.title()}"
-                        )
-                    else:
-                        send_telegram_message(
-                            chat_id,
-                            "Database error while updating city."
-                        )
-
-                # =========================
-                # /unsubscribe
-                # =========================
-
-                elif text == "/unsubscribe":
-
-                    success = delete_user(chat_id)
-
-                    if success:
-                        send_telegram_message(
-                            chat_id,
-                            "❌ You have been unsubscribed."
-                        )
-                    else:
-                        send_telegram_message(
-                            chat_id,
-                            "Database error while unsubscribing."
-                        )
-
-                # =========================
-                # /mycity
-                # =========================
-
-                elif text == "/mycity":
-
-                    city = get_user_city(chat_id)
-
-                    if city:
-                        send_telegram_message(
-                            chat_id,
-                            f"📍 Your subscribed city is: {city}"
-                        )
-                    else:
-                        send_telegram_message(
-                            chat_id,
-                            "No city found. Subscribe first."
-                        )
-
-        except Exception as e:
-            print("BOT POLLING ERROR:", e)
+        except Exception as outer_e:
+            print(f"[handle_updates] Request error: {outer_e}")
             time.sleep(5)
 
-# =========================
-# START BOT THREAD
-# =========================
+        time.sleep(1)
 
-Thread(target=handle_updates).start()
 
-# =========================
-# RUN FLASK APP
-# =========================
+# =========================================
+# SCHEDULER — 02:30 UTC = 8:00 AM IST
+# =========================================
+def run_scheduler() -> None:
+    schedule.every().day.at("02:30").do(send_alert_to_all)
+    now_ist = datetime.now(IST).strftime("%d %b %Y %I:%M %p IST")
+    print(f"[scheduler] Ready. IST time: {now_ist}")
+    print("[scheduler] Alerts fire at 02:30 UTC = 8:00 AM IST.")
+    while True:
+        try:
+            schedule.run_pending()
+        except Exception as e:
+            print(f"[scheduler] error: {e}")
+        time.sleep(30)
 
+
+# =========================================
+# HTTP SERVER
+# =========================================
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/send-alerts":
+            print("[http] /send-alerts triggered externally")
+            threading.Thread(target=send_alert_to_all, daemon=True).start()
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"Alerts triggered")
+            return
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"AQI Bot Running")
+
+    def log_message(self, *args):
+        pass
+
+
+def run_health_server() -> None:
+    port   = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    print(f"[http] Listening on port {port}.")
+    server.serve_forever()
+
+
+# =========================================
+# MAIN
+# =========================================
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-
-    app.run(host="0.0.0.0", port=port)
+    run_startup_checks()  # prints full diagnostics on every deploy
+    threading.Thread(target=run_scheduler,  daemon=True).start()
+    threading.Thread(target=handle_updates, daemon=True).start()
+    run_health_server()
