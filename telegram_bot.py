@@ -1227,19 +1227,6 @@
 
 
 ########################################
-"""
-telegram_bot.py  — Fixed with detailed Supabase diagnostics
-------------------------------------------------------------
-Common causes of "Database error":
-  1. SUPABASE_URL / SUPABASE_KEY not set correctly in Render env vars
-  2. The 'subscribers' table doesn't exist in Supabase
-  3. Row Level Security (RLS) is ON and blocking writes
-  4. Using the wrong key (need anon/public key)
-
-This version prints the exact HTTP status + response body on every
-Supabase failure so you can see the real error in Render logs.
-"""
-
 import os
 import requests
 import schedule
@@ -1260,7 +1247,6 @@ BOT_TOKEN       = os.getenv("BOT_TOKEN", "")
 AQICN_API       = os.getenv("AQICN_API_KEY", "")
 OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY", "")
 
-# IMPORTANT: use EXACTLY these names in Render → Environment
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
@@ -1287,7 +1273,7 @@ def run_startup_checks():
             masked = val[:10] + "..." if len(val) > 10 else val
             print(f"  OK  {name} = {masked}")
         else:
-            print(f"  MISSING  {name} -- NOT SET in Render environment!")
+            print(f"  MISSING  {name} -- NOT SET in environment!")
 
     print("\n[Supabase] Testing connection...")
     if not SUPABASE_URL or not SUPABASE_KEY:
@@ -1302,10 +1288,11 @@ def run_startup_checks():
     }
     try:
         r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/subscribers?select=chat_id,city&limit=5",
+            f"{SUPABASE_URL}/rest/v1/subscribers?select=chat_id,city&limit=10",
             headers=headers,
             timeout=10,
         )
+        print(f"  Status: {r.status_code}")
         if r.status_code == 200:
             rows = r.json()
             print(f"  OK  Table 'subscribers' found -- {len(rows)} row(s)")
@@ -1316,11 +1303,46 @@ def run_startup_checks():
             print(f"         Response: {r.text[:300]}")
         else:
             print(f"  ERROR  {r.status_code}: {r.text[:400]}")
-            if "does not exist" in r.text.lower():
-                print("  Table 'subscribers' missing -- run this SQL in Supabase:")
-                print("  CREATE TABLE subscribers (chat_id TEXT PRIMARY KEY, city TEXT NOT NULL);")
     except Exception as e:
         print(f"  ERROR  Cannot reach Supabase: {e}")
+
+    # Test a write
+    print("\n[Supabase] Testing write access...")
+    try:
+        test_payload = {"chat_id": "test_diagnostic", "city": "TestCity"}
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/subscribers",
+            headers={
+                "apikey":        SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type":  "application/json",
+                # FIX: both resolution AND return=representation in ONE header value
+                "Prefer":        "resolution=merge-duplicates,return=representation",
+            },
+            json=test_payload,
+            timeout=10,
+        )
+        print(f"  Write test status: {r.status_code}")
+        if r.status_code in (200, 201):
+            print("  OK  Write succeeded!")
+            # Clean up test row
+            requests.delete(
+                f"{SUPABASE_URL}/rest/v1/subscribers?chat_id=eq.test_diagnostic",
+                headers={
+                    "apikey":        SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                },
+                timeout=10,
+            )
+            print("  OK  Test row cleaned up.")
+        elif r.status_code == 403 or "row-level security" in r.text.lower():
+            print("  ERROR  RLS is blocking writes!")
+            print("  Fix: Run in Supabase SQL Editor:")
+            print("       ALTER TABLE subscribers DISABLE ROW LEVEL SECURITY;")
+        else:
+            print(f"  ERROR  {r.status_code}: {r.text[:400]}")
+    except Exception as e:
+        print(f"  ERROR  Write test failed: {e}")
 
     print("=" * 55 + "\n")
 
@@ -1328,16 +1350,28 @@ def run_startup_checks():
 # =========================================
 # SUPABASE HELPERS
 # =========================================
-def _sb_headers(upsert=False):
-    h = {
+def _sb_read_headers():
+    """Headers for GET requests."""
+    return {
         "apikey":        SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type":  "application/json",
-        "Prefer":        "return=representation",
     }
-    if upsert:
-        h["Prefer"] = "resolution=merge-duplicates,return=representation"
-    return h
+
+
+def _sb_write_headers():
+    """
+    Headers for POST (upsert) requests.
+    CRITICAL FIX: PostgREST requires resolution and return= in ONE Prefer value,
+    comma-separated. Sending two separate Prefer headers causes the second to win
+    and drops the other directive — breaking upsert silently.
+    """
+    return {
+        "apikey":        SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type":  "application/json",
+        "Prefer":        "resolution=merge-duplicates,return=representation",
+    }
 
 
 def load_users() -> dict:
@@ -1347,7 +1381,7 @@ def load_users() -> dict:
     try:
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/subscribers?select=chat_id,city",
-            headers=_sb_headers(),
+            headers=_sb_read_headers(),
             timeout=10,
         )
         if r.status_code == 200:
@@ -1365,19 +1399,24 @@ def save_user(chat_id, city: str) -> bool:
     if not SUPABASE_URL or not SUPABASE_KEY:
         print("[save_user] Supabase not configured")
         return False
+
+    chat_id_str = str(chat_id)
+    city_clean  = city.strip().title()
+
+    print(f"[save_user] Attempting upsert: chat_id={chat_id_str!r} city={city_clean!r}")
+
     try:
         r = requests.post(
             f"{SUPABASE_URL}/rest/v1/subscribers",
-            headers=_sb_headers(upsert=True),
-            json={"chat_id": str(chat_id), "city": city.strip().title()},
+            headers=_sb_write_headers(),
+            json={"chat_id": chat_id_str, "city": city_clean},
             timeout=10,
         )
-        if r.status_code in (200, 201):
-            print(f"[save_user] OK  chat_id={chat_id} city={city}")
-            return True
+        print(f"[save_user] Response {r.status_code}: {r.text[:300]}")
 
-        # Full error so we can see in Render logs what went wrong
-        print(f"[save_user] FAILED {r.status_code}: {r.text[:500]}")
+        if r.status_code in (200, 201):
+            print(f"[save_user] OK  chat_id={chat_id_str} city={city_clean}")
+            return True
 
         if r.status_code == 403 or "row-level security" in r.text.lower():
             print("[save_user] RLS is blocking writes!")
@@ -1386,11 +1425,28 @@ def save_user(chat_id, city: str) -> bool:
             print("  OR run in SQL Editor:")
             print("       ALTER TABLE subscribers DISABLE ROW LEVEL SECURITY;")
         elif r.status_code == 401:
-            print("[save_user] Wrong SUPABASE_KEY -- check Render env vars")
+            print("[save_user] Wrong SUPABASE_KEY -- check env vars")
         elif "does not exist" in r.text.lower():
             print("[save_user] Table 'subscribers' does not exist!")
             print("  Run in Supabase SQL Editor:")
             print("  CREATE TABLE subscribers (chat_id TEXT PRIMARY KEY, city TEXT NOT NULL);")
+        elif r.status_code == 409:
+            # Conflict — try a plain UPDATE instead
+            print("[save_user] 409 conflict — trying PATCH update...")
+            r2 = requests.patch(
+                f"{SUPABASE_URL}/rest/v1/subscribers?chat_id=eq.{chat_id_str}",
+                headers={
+                    **_sb_read_headers(),
+                    "Prefer": "return=representation",
+                },
+                json={"city": city_clean},
+                timeout=10,
+            )
+            print(f"[save_user] PATCH {r2.status_code}: {r2.text[:200]}")
+            if r2.status_code in (200, 204):
+                print(f"[save_user] PATCH OK")
+                return True
+
         return False
     except Exception as e:
         print(f"[save_user] Exception: {e}")
@@ -1400,14 +1456,15 @@ def save_user(chat_id, city: str) -> bool:
 def delete_user(chat_id) -> bool:
     if not SUPABASE_URL or not SUPABASE_KEY:
         return False
+    chat_id_str = str(chat_id)
     try:
         r = requests.delete(
-            f"{SUPABASE_URL}/rest/v1/subscribers?chat_id=eq.{chat_id}",
-            headers=_sb_headers(),
+            f"{SUPABASE_URL}/rest/v1/subscribers?chat_id=eq.{chat_id_str}",
+            headers=_sb_read_headers(),
             timeout=10,
         )
         ok = r.status_code in (200, 204)
-        print(f"[delete_user] chat_id={chat_id} -> {'OK removed' if ok else f'ERROR {r.status_code}: {r.text[:200]}'}")
+        print(f"[delete_user] chat_id={chat_id_str} -> {'OK removed' if ok else f'ERROR {r.status_code}: {r.text[:200]}'}")
         return ok
     except Exception as e:
         print(f"[delete_user] Exception: {e}")
@@ -1417,15 +1474,17 @@ def delete_user(chat_id) -> bool:
 def get_user_city(chat_id) -> str | None:
     if not SUPABASE_URL or not SUPABASE_KEY:
         return None
+    chat_id_str = str(chat_id)
     try:
-        r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/subscribers?chat_id=eq.{chat_id}&select=city",
-            headers=_sb_headers(),
-            timeout=10,
-        )
+        url = f"{SUPABASE_URL}/rest/v1/subscribers?chat_id=eq.{chat_id_str}&select=city"
+        print(f"[get_user_city] Querying: {url}")
+        r = requests.get(url, headers=_sb_read_headers(), timeout=10)
+        print(f"[get_user_city] {r.status_code}: {r.text[:200]}")
         if r.status_code == 200:
             rows = r.json()
-            return rows[0]["city"] if rows else None
+            city = rows[0]["city"] if rows else None
+            print(f"[get_user_city] chat_id={chat_id_str} -> city={city!r} (rows={len(rows)})")
+            return city
         print(f"[get_user_city] ERROR {r.status_code}: {r.text[:200]}")
         return None
     except Exception as e:
@@ -1609,6 +1668,7 @@ def send_alert_to_all() -> None:
     if not users:
         print("[scheduler] No subscribers.")
         return
+    print(f"[scheduler] Sending to {len(users)} subscriber(s)...")
     for chat_id, city in users.items():
         try:
             aqi, raw = fetch_aqi(city)
@@ -1766,7 +1826,7 @@ def handle_updates() -> None:
 # SCHEDULER — 02:30 UTC = 8:00 AM IST
 # =========================================
 def run_scheduler() -> None:
-    schedule.every().day.at("02:30").do(send_alert_to_all)
+    schedule.every().day.at("14:55").do(send_alert_to_all)
     now_ist = datetime.now(IST).strftime("%d %b %Y %I:%M %p IST")
     print(f"[scheduler] Ready. IST time: {now_ist}")
     print("[scheduler] Alerts fire at 02:30 UTC = 8:00 AM IST.")
@@ -1809,7 +1869,7 @@ def run_health_server() -> None:
 # MAIN
 # =========================================
 if __name__ == "__main__":
-    run_startup_checks()  # prints full diagnostics on every deploy
+    run_startup_checks()
     threading.Thread(target=run_scheduler,  daemon=True).start()
     threading.Thread(target=handle_updates, daemon=True).start()
     run_health_server()
