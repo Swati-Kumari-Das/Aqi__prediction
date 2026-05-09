@@ -1826,7 +1826,7 @@ def handle_updates() -> None:
 # SCHEDULER — 02:30 UTC = 8:00 AM IST
 # =========================================
 def run_scheduler() -> None:
-    schedule.every().day.at("20:55").do(send_alert_to_all)
+    schedule.every().day.at("21:15").do(send_alert_to_all)
     now_ist = datetime.now(IST).strftime("%d %b %Y %I:%M %p IST")
     print(f"[scheduler] Ready. IST time: {now_ist}")
     print("[scheduler] Alerts fire at 02:30 UTC = 8:00 AM IST.")
@@ -1835,7 +1835,7 @@ def run_scheduler() -> None:
             schedule.run_pending()
         except Exception as e:
             print(f"[scheduler] error: {e}")
-        time.sleep(30)
+        time.sleep(1)
 
 
 # =========================================
