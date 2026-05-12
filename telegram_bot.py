@@ -1,199 +1,199 @@
-# # """
-# # telegram_bot.py
-# # ---------------
-# # Runs as a SEPARATE background worker on Render.
-# # Sends a daily AQI alert to Telegram at 8:00 AM IST every day.
+# """
+# telegram_bot.py
+# ---------------
+# Runs as a SEPARATE background worker on Render.
+# Sends a daily AQI alert to Telegram at 8:00 AM IST every day.
 
-# # Deploy as a "Background Worker" service on Render (not a Web Service).
-# # Command: python telegram_bot.py
-# # """
+# Deploy as a "Background Worker" service on Render (not a Web Service).
+# Command: python telegram_bot.py
+# """
 
-# # import requests
-# # import schedule
-# # import time
-# # from datetime import datetime
-# # import pytz
-# # import os
-# # from dotenv import load_dotenv
-
-
-# # load_dotenv()
-
-# # # =========================================
-# # # CONFIG — replace with your values
-# # # =========================================
-# # BOT_TOKEN = os.getenv("BOT_TOKEN")
-# # CHAT_ID = os.getenv("CHAT_ID")
-# # AQICN_API = os.getenv("AQICN_API_KEY")
-# # OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY")
-
-# # # Cities to monitor — add/remove as needed
-# # CITIES = ["Delhi", "Mumbai", "Bangalore"]
-
-# # IST = pytz.timezone("Asia/Kolkata")
+# import requests
+# import schedule
+# import time
+# from datetime import datetime
+# import pytz
+# import os
+# from dotenv import load_dotenv
 
 
-# # # =========================================
-# # # FETCH AQI
-# # # =========================================
-# # def fetch_aqi(city):
-# #     try:
-# #         url = f"https://api.waqi.info/feed/{city}/?token={AQICN_API}"
-# #         res = requests.get(url, timeout=10).json()
-# #         if res["status"] != "ok":
-# #             return None, None
-# #         iaqi = res["data"]["iaqi"]
-# #         raw = {
-# #             "PM2.5": iaqi.get("pm25", {}).get("v"),
-# #             "PM10":  iaqi.get("pm10", {}).get("v"),
-# #             "NO2":   iaqi.get("no2",  {}).get("v"),
-# #             "SO2":   iaqi.get("so2",  {}).get("v"),
-# #             "CO":    iaqi.get("co",   {}).get("v"),
-# #             "O3":    iaqi.get("o3",   {}).get("v"),
-# #         }
-# #         vals = [v for v in raw.values() if v is not None]
-# #         if not vals:
-# #             return None, None
-# #         return int(max(vals)), raw
-# #     except Exception as e:
-# #         print(f"[fetch_aqi] Error for {city}: {e}")
-# #         return None, None
+# load_dotenv()
+
+# # =========================================
+# # CONFIG — replace with your values
+# # =========================================
+# BOT_TOKEN = os.getenv("BOT_TOKEN")
+# CHAT_ID = os.getenv("CHAT_ID")
+# AQICN_API = os.getenv("AQICN_API_KEY")
+# OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY")
+
+# # Cities to monitor — add/remove as needed
+# CITIES = ["Delhi", "Mumbai", "Bangalore"]
+
+# IST = pytz.timezone("Asia/Kolkata")
 
 
-# # # =========================================
-# # # AQI HELPERS
-# # # =========================================
-# # def category(aqi):
-# #     if aqi <= 50:    return "Good ✅",         "🟢"
-# #     elif aqi <= 100: return "Satisfactory 🙂",  "🟡"
-# #     elif aqi <= 200: return "Moderate 😐",       "🟠"
-# #     elif aqi <= 300: return "Poor 😷",           "🔴"
-# #     elif aqi <= 400: return "Very Poor 🤢",      "🔴"
-# #     else:            return "Severe ☠️",          "⚫"
-
-# # def get_advice(aqi):
-# #     if aqi <= 50:
-# #         return [
-# #             "✅ Air quality is good.",
-# #             "🏃 Safe for all outdoor activities.",
-# #             "💧 Stay hydrated.",
-# #         ]
-# #     elif aqi <= 100:
-# #         return [
-# #             "😷 Sensitive groups should wear a mask.",
-# #             "🚶 Limit prolonged outdoor exposure.",
-# #             "🪟 Keep windows closed during peak hours.",
-# #         ]
-# #     elif aqi <= 200:
-# #         return [
-# #             "😷 Wear N95 mask outdoors.",
-# #             "🏃 Avoid jogging between 8–10 AM.",
-# #             "🧴 Run air purifier indoors.",
-# #         ]
-# #     elif aqi <= 300:
-# #         return [
-# #             "🏠 Stay indoors as much as possible.",
-# #             "😷 Wear N95/N99 mask if going out.",
-# #             "🧴 Run purifier continuously.",
-# #             "❌ Avoid all outdoor exercise.",
-# #         ]
-# #     else:
-# #         return [
-# #             "🚨 SEVERE: Stay strictly indoors.",
-# #             "😷 Wear N99 mask even indoors.",
-# #             "👨‍👩‍👧 Protect elderly and children.",
-# #             "🏥 Seek medical help if breathing issues.",
-# #         ]
-
-# # def best_outdoor_time(aqi):
-# #     if aqi <= 100:   return "🕕 Any time is fine. Morning (6–8 AM) is freshest."
-# #     elif aqi <= 200: return "🕔 Early morning (5–7 AM) before traffic peaks."
-# #     else:            return "🚫 Not recommended to go outside today."
+# # =========================================
+# # FETCH AQI
+# # =========================================
+# def fetch_aqi(city):
+#     try:
+#         url = f"https://api.waqi.info/feed/{city}/?token={AQICN_API}"
+#         res = requests.get(url, timeout=10).json()
+#         if res["status"] != "ok":
+#             return None, None
+#         iaqi = res["data"]["iaqi"]
+#         raw = {
+#             "PM2.5": iaqi.get("pm25", {}).get("v"),
+#             "PM10":  iaqi.get("pm10", {}).get("v"),
+#             "NO2":   iaqi.get("no2",  {}).get("v"),
+#             "SO2":   iaqi.get("so2",  {}).get("v"),
+#             "CO":    iaqi.get("co",   {}).get("v"),
+#             "O3":    iaqi.get("o3",   {}).get("v"),
+#         }
+#         vals = [v for v in raw.values() if v is not None]
+#         if not vals:
+#             return None, None
+#         return int(max(vals)), raw
+#     except Exception as e:
+#         print(f"[fetch_aqi] Error for {city}: {e}")
+#         return None, None
 
 
-# # # =========================================
-# # # BUILD & SEND MESSAGE
-# # # =========================================
-# # def build_message():
-# #     now_ist = datetime.now(IST).strftime("%d %b %Y, %I:%M %p IST")
-# #     lines = [
-# #         f"🌫️ *Daily AQI Morning Alert*",
-# #         f"📅 {now_ist}",
-# #         f"{'─' * 30}",
-# #     ]
+# # =========================================
+# # AQI HELPERS
+# # =========================================
+# def category(aqi):
+#     if aqi <= 50:    return "Good ✅",         "🟢"
+#     elif aqi <= 100: return "Satisfactory 🙂",  "🟡"
+#     elif aqi <= 200: return "Moderate 😐",       "🟠"
+#     elif aqi <= 300: return "Poor 😷",           "🔴"
+#     elif aqi <= 400: return "Very Poor 🤢",      "🔴"
+#     else:            return "Severe ☠️",          "⚫"
 
-# #     for city in CITIES:
-# #         aqi, raw = fetch_aqi(city)
-# #         if aqi is None:
-# #             lines.append(f"\n📍 *{city}*: Data unavailable")
-# #             continue
+# def get_advice(aqi):
+#     if aqi <= 50:
+#         return [
+#             "✅ Air quality is good.",
+#             "🏃 Safe for all outdoor activities.",
+#             "💧 Stay hydrated.",
+#         ]
+#     elif aqi <= 100:
+#         return [
+#             "😷 Sensitive groups should wear a mask.",
+#             "🚶 Limit prolonged outdoor exposure.",
+#             "🪟 Keep windows closed during peak hours.",
+#         ]
+#     elif aqi <= 200:
+#         return [
+#             "😷 Wear N95 mask outdoors.",
+#             "🏃 Avoid jogging between 8–10 AM.",
+#             "🧴 Run air purifier indoors.",
+#         ]
+#     elif aqi <= 300:
+#         return [
+#             "🏠 Stay indoors as much as possible.",
+#             "😷 Wear N95/N99 mask if going out.",
+#             "🧴 Run purifier continuously.",
+#             "❌ Avoid all outdoor exercise.",
+#         ]
+#     else:
+#         return [
+#             "🚨 SEVERE: Stay strictly indoors.",
+#             "😷 Wear N99 mask even indoors.",
+#             "👨‍👩‍👧 Protect elderly and children.",
+#             "🏥 Seek medical help if breathing issues.",
+#         ]
 
-# #         cat_label, cat_emoji = category(aqi)
-# #         advice = get_advice(aqi)
-# #         outdoor = best_outdoor_time(aqi)
-
-# #         lines.append(f"\n📍 *{city}*")
-# #         lines.append(f"{cat_emoji} AQI: *{aqi}* — {cat_label}")
-# #         lines.append(f"")
-# #         lines.append(f"💡 *Advice:*")
-# #         for tip in advice:
-# #             lines.append(f"  {tip}")
-# #         lines.append(f"⏰ {outdoor}")
-
-# #         if raw:
-# #             pollutants = {k: v for k, v in raw.items() if v is not None}
-# #             if pollutants:
-# #                 worst_key = max(pollutants, key=lambda k: pollutants[k])
-# #                 lines.append(f"🔬 Highest pollutant: *{worst_key}* ({pollutants[worst_key]})")
-
-# #         lines.append(f"{'─' * 30}")
-
-# #     lines.append("\n_This alert is sent daily at 8:00 AM IST._")
-# #     return "\n".join(lines)
-
-
-# # def send_alert():
-# #     print(f"[{datetime.now(IST).strftime('%H:%M:%S')}] Sending daily AQI alert...")
-# #     msg = build_message()
-# #     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-# #     try:
-# #         res = requests.post(url, data={
-# #             "chat_id":    CHAT_ID,
-# #             "text":       msg,
-# #             "parse_mode": "Markdown",
-# #         }, timeout=15)
-# #         if res.status_code == 200:
-# #             print("✅ Alert sent successfully.")
-# #         else:
-# #             print(f"❌ Failed: {res.text}")
-# #     except Exception as e:
-# #         print(f"❌ Error sending alert: {e}")
+# def best_outdoor_time(aqi):
+#     if aqi <= 100:   return "🕕 Any time is fine. Morning (6–8 AM) is freshest."
+#     elif aqi <= 200: return "🕔 Early morning (5–7 AM) before traffic peaks."
+#     else:            return "🚫 Not recommended to go outside today."
 
 
-# # # =========================================
-# # # SCHEDULER — 8:00 AM IST daily
-# # # =========================================
-# # def run_scheduler():
-# #     # Schedule at 08:00 IST
-# #     # Render servers run UTC — IST = UTC+5:30 — so 08:00 IST = 02:30 UTC
-# #     schedule.every().day.at("02:30").do(send_alert)
+# # =========================================
+# # BUILD & SEND MESSAGE
+# # =========================================
+# def build_message():
+#     now_ist = datetime.now(IST).strftime("%d %b %Y, %I:%M %p IST")
+#     lines = [
+#         f"🌫️ *Daily AQI Morning Alert*",
+#         f"📅 {now_ist}",
+#         f"{'─' * 30}",
+#     ]
 
-# #     print("🤖 Telegram AQI Bot started. Waiting for 8:00 AM IST...")
-# #     print(f"   Current time: {datetime.now(IST).strftime('%d %b %Y %I:%M %p IST')}")
+#     for city in CITIES:
+#         aqi, raw = fetch_aqi(city)
+#         if aqi is None:
+#             lines.append(f"\n📍 *{city}*: Data unavailable")
+#             continue
 
-# #     # Send one immediately on startup for testing (comment out in production)
-# #     # send_alert()
+#         cat_label, cat_emoji = category(aqi)
+#         advice = get_advice(aqi)
+#         outdoor = best_outdoor_time(aqi)
 
-# #     while True:
-# #         schedule.run_pending()
-# #         time.sleep(30)
+#         lines.append(f"\n📍 *{city}*")
+#         lines.append(f"{cat_emoji} AQI: *{aqi}* — {cat_label}")
+#         lines.append(f"")
+#         lines.append(f"💡 *Advice:*")
+#         for tip in advice:
+#             lines.append(f"  {tip}")
+#         lines.append(f"⏰ {outdoor}")
+
+#         if raw:
+#             pollutants = {k: v for k, v in raw.items() if v is not None}
+#             if pollutants:
+#                 worst_key = max(pollutants, key=lambda k: pollutants[k])
+#                 lines.append(f"🔬 Highest pollutant: *{worst_key}* ({pollutants[worst_key]})")
+
+#         lines.append(f"{'─' * 30}")
+
+#     lines.append("\n_This alert is sent daily at 8:00 AM IST._")
+#     return "\n".join(lines)
 
 
-# # if __name__ == "__main__":
-# #     run_scheduler()
+# def send_alert():
+#     print(f"[{datetime.now(IST).strftime('%H:%M:%S')}] Sending daily AQI alert...")
+#     msg = build_message()
+#     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+#     try:
+#         res = requests.post(url, data={
+#             "chat_id":    CHAT_ID,
+#             "text":       msg,
+#             "parse_mode": "Markdown",
+#         }, timeout=15)
+#         if res.status_code == 200:
+#             print("✅ Alert sent successfully.")
+#         else:
+#             print(f"❌ Failed: {res.text}")
+#     except Exception as e:
+#         print(f"❌ Error sending alert: {e}")
 
 
-# ############################################################################################
+# # =========================================
+# # SCHEDULER — 8:00 AM IST daily
+# # =========================================
+# def run_scheduler():
+#     # Schedule at 08:00 IST
+#     # Render servers run UTC — IST = UTC+5:30 — so 08:00 IST = 02:30 UTC
+#     schedule.every().day.at("02:30").do(send_alert)
+
+#     print("🤖 Telegram AQI Bot started. Waiting for 8:00 AM IST...")
+#     print(f"   Current time: {datetime.now(IST).strftime('%d %b %Y %I:%M %p IST')}")
+
+#     # Send one immediately on startup for testing (comment out in production)
+#     # send_alert()
+
+#     while True:
+#         schedule.run_pending()
+#         time.sleep(30)
+
+
+# if __name__ == "__main__":
+#     run_scheduler()
+
+
+############################################################################################
 # import requests
 # import schedule
 # import time
@@ -392,7 +392,7 @@
 #     ).start()
 
 #     run_health_server()
-##############################################################################################
+#############################################################################################
 
 # import requests
 # import schedule
@@ -1224,16 +1224,18 @@
 
 
 
+##############################################################################3
 
-
-########################################
+# ########################################
 import os
+import json
 import requests
 import schedule
 import threading
 import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 import pytz
 from dotenv import load_dotenv
@@ -1241,255 +1243,82 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # =========================================
-# CONFIG  — reads from Render env vars
+# CONFIG
 # =========================================
 BOT_TOKEN       = os.getenv("BOT_TOKEN", "")
 AQICN_API       = os.getenv("AQICN_API_KEY", "")
 OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY", "")
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
-
 IST = pytz.timezone("Asia/Kolkata")
 
+# Path to local subscribers file — sits next to this script
+SUBSCRIBERS_FILE = Path(__file__).parent / "subscribers.json"
+
 
 # =========================================
-# STARTUP DIAGNOSTICS
+# LOCAL JSON STORAGE  (replaces Supabase)
 # =========================================
-def run_startup_checks():
-    print("\n" + "=" * 55)
-    print("STARTUP DIAGNOSTICS")
-    print("=" * 55)
 
-    vars_to_check = {
-        "BOT_TOKEN":       BOT_TOKEN,
-        "AQICN_API_KEY":   AQICN_API,
-        "OPENWEATHER_KEY": OPENWEATHER_KEY,
-        "SUPABASE_URL":    SUPABASE_URL,
-        "SUPABASE_KEY":    SUPABASE_KEY,
-    }
-    for name, val in vars_to_check.items():
-        if val:
-            masked = val[:10] + "..." if len(val) > 10 else val
-            print(f"  OK  {name} = {masked}")
-        else:
-            print(f"  MISSING  {name} -- NOT SET in environment!")
-
-    print("\n[Supabase] Testing connection...")
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        print("  SKIP -- SUPABASE_URL or SUPABASE_KEY missing")
-        print("=" * 55 + "\n")
-        return
-
-    headers = {
-        "apikey":        SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type":  "application/json",
-    }
+def _read_file() -> dict:
+    """Load subscribers dict from JSON file. Returns {} on any error."""
     try:
-        r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/subscribers?select=chat_id,city&limit=10",
-            headers=headers,
-            timeout=10,
-        )
-        print(f"  Status: {r.status_code}")
-        if r.status_code == 200:
-            rows = r.json()
-            print(f"  OK  Table 'subscribers' found -- {len(rows)} row(s)")
-            for row in rows:
-                print(f"       chat_id={row['chat_id']}  city={row['city']}")
-        elif r.status_code == 401:
-            print(f"  ERROR  401 Unauthorized -- SUPABASE_KEY is wrong!")
-            print(f"         Response: {r.text[:300]}")
-        else:
-            print(f"  ERROR  {r.status_code}: {r.text[:400]}")
+        if SUBSCRIBERS_FILE.exists():
+            with open(SUBSCRIBERS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
     except Exception as e:
-        print(f"  ERROR  Cannot reach Supabase: {e}")
+        print(f"[storage] Read error: {e}")
+    return {}
 
-    # Test a write
-    print("\n[Supabase] Testing write access...")
+
+def _write_file(data: dict) -> bool:
+    """Persist subscribers dict to JSON file."""
     try:
-        test_payload = {"chat_id": "test_diagnostic", "city": "TestCity"}
-        r = requests.post(
-            f"{SUPABASE_URL}/rest/v1/subscribers",
-            headers={
-                "apikey":        SUPABASE_KEY,
-                "Authorization": f"Bearer {SUPABASE_KEY}",
-                "Content-Type":  "application/json",
-                # FIX: both resolution AND return=representation in ONE header value
-                "Prefer":        "resolution=merge-duplicates,return=representation",
-            },
-            json=test_payload,
-            timeout=10,
-        )
-        print(f"  Write test status: {r.status_code}")
-        if r.status_code in (200, 201):
-            print("  OK  Write succeeded!")
-            # Clean up test row
-            requests.delete(
-                f"{SUPABASE_URL}/rest/v1/subscribers?chat_id=eq.test_diagnostic",
-                headers={
-                    "apikey":        SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}",
-                },
-                timeout=10,
-            )
-            print("  OK  Test row cleaned up.")
-        elif r.status_code == 403 or "row-level security" in r.text.lower():
-            print("  ERROR  RLS is blocking writes!")
-            print("  Fix: Run in Supabase SQL Editor:")
-            print("       ALTER TABLE subscribers DISABLE ROW LEVEL SECURITY;")
-        else:
-            print(f"  ERROR  {r.status_code}: {r.text[:400]}")
+        with open(SUBSCRIBERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        return True
     except Exception as e:
-        print(f"  ERROR  Write test failed: {e}")
-
-    print("=" * 55 + "\n")
-
-
-# =========================================
-# SUPABASE HELPERS
-# =========================================
-def _sb_read_headers():
-    """Headers for GET requests."""
-    return {
-        "apikey":        SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type":  "application/json",
-    }
-
-
-def _sb_write_headers():
-    """
-    Headers for POST (upsert) requests.
-    CRITICAL FIX: PostgREST requires resolution and return= in ONE Prefer value,
-    comma-separated. Sending two separate Prefer headers causes the second to win
-    and drops the other directive — breaking upsert silently.
-    """
-    return {
-        "apikey":        SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type":  "application/json",
-        "Prefer":        "resolution=merge-duplicates,return=representation",
-    }
+        print(f"[storage] Write error: {e}")
+        return False
 
 
 def load_users() -> dict:
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        print("[load_users] Supabase not configured")
-        return {}
-    try:
-        r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/subscribers?select=chat_id,city",
-            headers=_sb_read_headers(),
-            timeout=10,
-        )
-        if r.status_code == 200:
-            result = {row["chat_id"]: row["city"] for row in r.json()}
-            print(f"[load_users] {len(result)} subscriber(s): {result}")
-            return result
-        print(f"[load_users] ERROR {r.status_code}: {r.text[:300]}")
-        return {}
-    except Exception as e:
-        print(f"[load_users] Exception: {e}")
-        return {}
+    users = _read_file()
+    print(f"[load_users] {len(users)} subscriber(s): {users}")
+    return users
 
 
 def save_user(chat_id, city: str) -> bool:
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        print("[save_user] Supabase not configured")
-        return False
-
     chat_id_str = str(chat_id)
     city_clean  = city.strip().title()
-
-    print(f"[save_user] Attempting upsert: chat_id={chat_id_str!r} city={city_clean!r}")
-
-    try:
-        r = requests.post(
-            f"{SUPABASE_URL}/rest/v1/subscribers",
-            headers=_sb_write_headers(),
-            json={"chat_id": chat_id_str, "city": city_clean},
-            timeout=10,
-        )
-        print(f"[save_user] Response {r.status_code}: {r.text[:300]}")
-
-        if r.status_code in (200, 201):
-            print(f"[save_user] OK  chat_id={chat_id_str} city={city_clean}")
-            return True
-
-        if r.status_code == 403 or "row-level security" in r.text.lower():
-            print("[save_user] RLS is blocking writes!")
-            print("  Fix: Supabase Dashboard -> Table Editor -> subscribers")
-            print("       -> RLS -> Disable Row Level Security")
-            print("  OR run in SQL Editor:")
-            print("       ALTER TABLE subscribers DISABLE ROW LEVEL SECURITY;")
-        elif r.status_code == 401:
-            print("[save_user] Wrong SUPABASE_KEY -- check env vars")
-        elif "does not exist" in r.text.lower():
-            print("[save_user] Table 'subscribers' does not exist!")
-            print("  Run in Supabase SQL Editor:")
-            print("  CREATE TABLE subscribers (chat_id TEXT PRIMARY KEY, city TEXT NOT NULL);")
-        elif r.status_code == 409:
-            # Conflict — try a plain UPDATE instead
-            print("[save_user] 409 conflict — trying PATCH update...")
-            r2 = requests.patch(
-                f"{SUPABASE_URL}/rest/v1/subscribers?chat_id=eq.{chat_id_str}",
-                headers={
-                    **_sb_read_headers(),
-                    "Prefer": "return=representation",
-                },
-                json={"city": city_clean},
-                timeout=10,
-            )
-            print(f"[save_user] PATCH {r2.status_code}: {r2.text[:200]}")
-            if r2.status_code in (200, 204):
-                print(f"[save_user] PATCH OK")
-                return True
-
-        return False
-    except Exception as e:
-        print(f"[save_user] Exception: {e}")
-        return False
+    users = _read_file()
+    users[chat_id_str] = city_clean
+    ok = _write_file(users)
+    if ok:
+        print(f"[save_user] OK  chat_id={chat_id_str} city={city_clean}")
+    else:
+        print(f"[save_user] FAILED for chat_id={chat_id_str}")
+    return ok
 
 
 def delete_user(chat_id) -> bool:
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return False
     chat_id_str = str(chat_id)
-    try:
-        r = requests.delete(
-            f"{SUPABASE_URL}/rest/v1/subscribers?chat_id=eq.{chat_id_str}",
-            headers=_sb_read_headers(),
-            timeout=10,
-        )
-        ok = r.status_code in (200, 204)
-        print(f"[delete_user] chat_id={chat_id_str} -> {'OK removed' if ok else f'ERROR {r.status_code}: {r.text[:200]}'}")
+    users = _read_file()
+    if chat_id_str in users:
+        del users[chat_id_str]
+        ok = _write_file(users)
+        print(f"[delete_user] {'OK removed' if ok else 'FAILED'} chat_id={chat_id_str}")
         return ok
-    except Exception as e:
-        print(f"[delete_user] Exception: {e}")
-        return False
+    print(f"[delete_user] chat_id={chat_id_str} not found")
+    return False
 
 
 def get_user_city(chat_id) -> str | None:
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return None
     chat_id_str = str(chat_id)
-    try:
-        url = f"{SUPABASE_URL}/rest/v1/subscribers?chat_id=eq.{chat_id_str}&select=city"
-        print(f"[get_user_city] Querying: {url}")
-        r = requests.get(url, headers=_sb_read_headers(), timeout=10)
-        print(f"[get_user_city] {r.status_code}: {r.text[:200]}")
-        if r.status_code == 200:
-            rows = r.json()
-            city = rows[0]["city"] if rows else None
-            print(f"[get_user_city] chat_id={chat_id_str} -> city={city!r} (rows={len(rows)})")
-            return city
-        print(f"[get_user_city] ERROR {r.status_code}: {r.text[:200]}")
-        return None
-    except Exception as e:
-        print(f"[get_user_city] Exception: {e}")
-        return None
+    city = _read_file().get(chat_id_str)
+    print(f"[get_user_city] chat_id={chat_id_str} -> city={city!r}")
+    return city
 
 
 # =========================================
@@ -1660,6 +1489,7 @@ def send_instant_alert(chat_id, city: str) -> None:
 
 # =========================================
 # SCHEDULED ALERT — fires once at 8 AM IST
+# (02:30 UTC = 08:00 IST)
 # =========================================
 def send_alert_to_all() -> None:
     now_ist = datetime.now(IST).strftime("%d %b %Y %I:%M %p IST")
@@ -1729,6 +1559,7 @@ def handle_updates() -> None:
                     if cmd is None:
                         continue
 
+                    # ── /start ─────────────────────────────────────────────
                     if cmd == "start":
                         send_message(
                             chat_id,
@@ -1741,20 +1572,14 @@ def handle_updates() -> None:
                             "Example: /subscribe Delhi"
                         )
 
+                    # ── /subscribe ─────────────────────────────────────────
                     elif cmd == "subscribe":
                         if not args:
                             send_message(chat_id, "Please provide a city.\nExample: /subscribe Delhi")
                             continue
                         city_name = args.strip().title()
                         old_city  = get_user_city(chat_id)
-                        ok        = save_user(chat_id, city_name)
-                        if not ok:
-                            send_message(
-                                chat_id,
-                                "Database error. Please try again in a moment.\n"
-                                "If this keeps happening, ask the admin to check Render logs."
-                            )
-                            continue
+                        save_user(chat_id, city_name)          # always succeeds locally
                         if old_city and old_city != city_name:
                             send_message(chat_id, f"City updated: {old_city} -> {city_name}\nFetching AQI now...")
                         else:
@@ -1766,22 +1591,21 @@ def handle_updates() -> None:
                             )
                         send_instant_alert(chat_id, city_name)
 
+                    # ── /changecity ────────────────────────────────────────
                     elif cmd == "changecity":
                         if not args:
                             send_message(chat_id, "Please provide a city.\nExample: /changecity Mumbai")
                             continue
                         city_name = args.strip().title()
                         old_city  = get_user_city(chat_id)
-                        ok        = save_user(chat_id, city_name)
-                        if not ok:
-                            send_message(chat_id, "Database error. Please try again.")
-                            continue
+                        save_user(chat_id, city_name)
                         send_message(
                             chat_id,
                             f"City updated: {old_city or 'none'} -> {city_name}\nFetching AQI now..."
                         )
                         send_instant_alert(chat_id, city_name)
 
+                    # ── /unsubscribe ───────────────────────────────────────
                     elif cmd == "unsubscribe":
                         removed = delete_user(chat_id)
                         if removed:
@@ -1793,6 +1617,7 @@ def handle_updates() -> None:
                         else:
                             send_message(chat_id, "You were not subscribed.\nUse /subscribe <city> to start.")
 
+                    # ── /aqi ───────────────────────────────────────────────
                     elif cmd == "aqi":
                         city_name = get_user_city(chat_id)
                         if not city_name:
@@ -1801,6 +1626,7 @@ def handle_updates() -> None:
                             send_message(chat_id, f"Fetching AQI for {city_name}...")
                             send_instant_alert(chat_id, city_name)
 
+                    # ── unknown ────────────────────────────────────────────
                     else:
                         send_message(
                             chat_id,
@@ -1839,7 +1665,7 @@ def run_scheduler() -> None:
 
 
 # =========================================
-# HTTP SERVER
+# HTTP HEALTH SERVER (for Render keep-alive)
 # =========================================
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -1869,7 +1695,14 @@ def run_health_server() -> None:
 # MAIN
 # =========================================
 if __name__ == "__main__":
-    run_startup_checks()
+    # Ensure subscribers.json exists
+    if not SUBSCRIBERS_FILE.exists():
+        _write_file({})
+        print(f"[startup] Created empty {SUBSCRIBERS_FILE}")
+    else:
+        users = load_users()
+        print(f"[startup] Loaded {len(users)} existing subscriber(s).")
+
     threading.Thread(target=run_scheduler,  daemon=True).start()
     threading.Thread(target=handle_updates, daemon=True).start()
     run_health_server()
